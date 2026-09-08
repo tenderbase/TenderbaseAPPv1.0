@@ -1,0 +1,71 @@
+# ---------------------------------------------------------------------------
+# The core feature: poll for newly released tenders once an hour.
+#
+# This runs on GitHub Actions rather than Render because cron jobs are not
+# offered on Render's free tier.
+#
+# Cost: free for public repositories. Private repositories get 2000 minutes
+# per month; this job takes roughly 2 minutes, so ~730 runs/month lands around
+# 1500 minutes. Make the repo public for unlimited minutes, or trim the cost by
+# caching (already on) and keeping the ingest window at 7 days.
+#
+# Required repository secrets (Settings -> Secrets and variables -> Actions):
+#   DATABASE_URL, DIRECT_URL                     (required)
+#   VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY,         (optional)
+#   VAPID_SUBJECT, RESEND_API_KEY, EMAIL_FROM    (optional)
+# ---------------------------------------------------------------------------
+name: Hourly tender ingest
+
+on:
+  schedule:
+    # Minute 17 rather than 0: everyone's cron fires on the hour and GitHub
+    # delays scheduled runs under load. GitHub evaluates cron in UTC.
+    - cron: "17 * * * *"
+  workflow_dispatch: # allows a manual run from the Actions tab
+
+concurrency:
+  group: hourly-ingest
+  cancel-in-progress: false # never cancel a run that is mid-ingest
+
+jobs:
+  hourly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20 # safety net; a normal run is ~2 minutes
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm # caches ~/.npm so `npm ci` takes seconds
+
+      - run: npm ci
+      - run: npx prisma generate
+      - run: npm run build
+
+      # Idempotent and advisory-locked, so running it on every schedule is
+      # safe even though the Render deploy migrates too. It is here so a
+      # pending migration can never leave the hourly job writing to stale
+      # tables.
+      - name: Apply any pending migrations
+        run: npx prisma migrate deploy
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DIRECT_URL: ${{ secrets.DIRECT_URL }}
+
+      - name: Ingest, match and notify
+        run: npm run hourly:prod
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DIRECT_URL: ${{ secrets.DIRECT_URL }}
+          NODE_ENV: production
+          # 7 rather than 1: National Treasury occasionally publishes releases
+          # dated several days back, and re-fetching is cheap because the
+          # upsert skips rows whose content hash is unchanged.
+          INGEST_WINDOW_DAYS: "7"
+          VAPID_PUBLIC_KEY: ${{ secrets.VAPID_PUBLIC_KEY }}
+          VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
+          VAPID_SUBJECT: ${{ secrets.VAPID_SUBJECT }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}

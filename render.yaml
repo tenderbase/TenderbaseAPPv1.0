@@ -1,0 +1,66 @@
+# ---------------------------------------------------------------------------
+# TenderBase — Render Blueprint (FREE tier)
+#
+# ONE resource: the API web service.
+#
+# Two things deliberately live elsewhere:
+#
+#   DATABASE  -> Neon (free), not Render.
+#                Render's free Postgres is DELETED after 30 days, which would
+#                silently take the whole tender history with it. Neon's free
+#                tier is permanent: 0.5 GB storage, 100 CU-hours/month compute,
+#                suspends after 5 min idle. This database is ~12 MB, so there
+#                is a lot of headroom.
+#
+#   HOURLY JOB -> GitHub Actions, not Render.
+#                Cron jobs are NOT available on Render's free tier (billed from
+#                $1/month). See .github/workflows/hourly.yml.
+#
+# Deploy: Render Dashboard -> Blueprints -> New Blueprint Instance -> this repo.
+# Values marked `sync: false` are secrets: Render asks for them on the first
+# deploy and they are never stored in Git.
+# ---------------------------------------------------------------------------
+services:
+  - type: web
+    name: tenderbase-api
+    runtime: node
+    region: frankfurt # closest to South Africa — pick the SAME region in Neon
+    plan: free
+    branch: main
+    healthCheckPath: /health
+    # Verified: npm 10 installs devDependencies even with NODE_ENV=production,
+    # so `tsc` is available here. If that ever changes, add `--include=dev`.
+    buildCommand: npm ci && npx prisma generate && npm run build
+    # Runs against DIRECT_URL (Neon's unpooled endpoint) via `directUrl` in
+    # schema.prisma — DDL does not survive PgBouncer's transaction mode.
+    preDeployCommand: npx prisma migrate deploy
+    # Compiled output, not tsx: a free instance gets 512 MB RAM and loading the
+    # TypeScript transform machinery at runtime is memory we would rather spend
+    # on Prisma.
+    startCommand: node dist/cli/serve.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # Neon POOLED connection — hostname contains `-pooler`.
+      - key: DATABASE_URL
+        sync: false
+      # Neon DIRECT connection — hostname has NO `-pooler`. Used by migrations.
+      - key: DIRECT_URL
+        sync: false
+      - key: CORS_ORIGINS
+        value: https://tenderbase-web.onrender.com
+      # Optional. Leave blank for an open read-only API.
+      - key: API_KEY
+        sync: false
+      - key: VAPID_PUBLIC_KEY
+        sync: false
+      - key: VAPID_PRIVATE_KEY
+        sync: false
+      - key: VAPID_SUBJECT
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
+
+# Intentionally NO `databases:` block — the database lives on Neon.

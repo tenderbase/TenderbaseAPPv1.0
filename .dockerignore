@@ -1,0 +1,21 @@
+# Keep the build context small and keep secrets out of the image.
+node_modules
+dist
+build
+coverage
+
+# Secrets must never be baked into an image.
+.env
+.env.*
+!.env.example
+
+.git
+.github
+.gitignore
+.render
+*.log
+
+# Docs and notes are not needed at runtime (README is copied back in explicitly
+# by nothing — it is simply not required).
+PROGRESS.md
+*.md

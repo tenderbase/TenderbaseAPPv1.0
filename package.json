@@ -1,0 +1,41 @@
+{
+  "name": "tenderbase-pipeline",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Ingestion pipeline + API for TenderBase (SA public procurement tenders)",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "check": "tsx src/cli/check.ts",
+    "ingest": "tsx src/cli/ingest.ts",
+    "serve": "tsx src/cli/serve.ts",
+    "test:contract": "tsx scripts/contract_test.ts",
+    "notify": "tsx src/cli/notify.ts",
+    "typecheck": "tsc --noEmit",
+    "notify:test": "tsx scripts/notify_test.ts",
+    "hourly": "tsx src/cli/hourly.ts",
+    "backfill": "tsx src/cli/ingest.ts --backfill --live --days 31",
+    "migrate": "prisma migrate deploy",
+    "start": "node dist/cli/serve.js",
+    "build": "tsc -p tsconfig.json",
+    "hourly:prod": "node dist/cli/hourly.js",
+    "backfill:prod": "node dist/cli/ingest.js --backfill --live --days 31"
+  },
+  "dependencies": {
+    "@fastify/cors": "^11.3.0",
+    "@fastify/helmet": "^13.1.1",
+    "@prisma/client": "^6.19.3",
+    "@types/web-push": "^3.6.4",
+    "fastify": "^5.12.3",
+    "prisma": "^6.19.3",
+    "web-push": "^3.6.7",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.10",
+    "typescript": "^5.5.3",
+    "tsx": "^4.16.2"
+  }
+}
