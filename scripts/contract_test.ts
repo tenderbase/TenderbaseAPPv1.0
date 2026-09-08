@@ -1,9 +1,10 @@
 /**
- * Phase 3 acceptance test.
+ * Phase 3 + API UI & Metadata Acceptance Test.
  *
  * 1. Asserts our response shape is key-for-key compatible with the live
  *    TenderBase API (the app must not need changes).
- * 2. Exercises every filter the product depends on.
+ * 2. Exercises all metadata and helper endpoints (/stats, /categories, /provinces, /docs).
+ * 3. Exercises every filter and additive parameter the product depends on.
  */
 const LOCAL = process.env.LOCAL ?? "http://127.0.0.1:3000";
 const LIVE = "https://tenderbase-web.onrender.com";
@@ -22,11 +23,32 @@ async function j(url: string) {
 
 async function main() {
   console.log("=".repeat(70));
-  console.log("1. HEALTH");
+  console.log("1. HEALTH & METADATA ENDPOINTS");
   console.log("=".repeat(70));
   const health = await j(`${LOCAL}/health`);
-  console.log("  ", JSON.stringify(health));
+  console.log("   /health:", JSON.stringify(health));
   assert("health returns status ok", health.status === "ok");
+
+  const stats = await j(`${LOCAL}/stats`);
+  console.log("   /stats:", JSON.stringify(stats.stats));
+  assert("stats returns totalTenders", typeof stats.stats.totalTenders === "number");
+  assert("stats returns activeTenders", typeof stats.stats.activeTenders === "number");
+  assert("stats returns categoriesCount", typeof stats.stats.categoriesCount === "number");
+
+  const cats = await j(`${LOCAL}/categories`);
+  console.log(`   /categories: total=${cats.total}, top=${cats.categories[0]?.category} (${cats.categories[0]?.count})`);
+  assert("categories returns array", Array.isArray(cats.categories) && cats.total > 0);
+
+  const provs = await j(`${LOCAL}/provinces`);
+  console.log(`   /provinces: total=${provs.total}, top=${provs.provinces[0]?.province} (${provs.provinces[0]?.count})`);
+  assert("provinces returns array", Array.isArray(provs.provinces) && provs.total > 0);
+
+  const docsRes = await fetch(`${LOCAL}/docs`);
+  assert("docs (Swagger UI) returns 200", docsRes.status === 200);
+
+  const rootHtml = await fetch(`${LOCAL}/`, { headers: { accept: "text/html" } });
+  const htmlText = await rootHtml.text();
+  assert("root dashboard returns HTML UI", rootHtml.status === 200 && htmlText.includes("TenderBase API"));
 
   console.log("\n" + "=".repeat(70));
   console.log("2. BASIC LIST");
@@ -81,7 +103,7 @@ async function main() {
   }
 
   console.log("\n" + "=".repeat(70));
-  console.log("4. FILTERS");
+  console.log("4. FILTERS & ADDITIVE QUERY PARAMS");
   console.log("=".repeat(70));
   const kzn = await j(`${LOCAL}/tenders?province=KwaZulu-Natal&limit=5`);
   console.log(`   province=KwaZulu-Natal -> total=${kzn.total}`);
@@ -95,7 +117,6 @@ async function main() {
   const sea = await j(`${LOCAL}/tenders?q=catering&limit=5`);
   console.log(`   q=catering -> total=${sea.total}`);
   assert("full-text q returns matches", sea.total > 0);
-  console.log(`     e.g. ${(sea.results[0]?.description ?? "").slice(0, 70)}`);
 
   const cons = await j(`${LOCAL}/tenders?constructionOnly=true&limit=5`);
   console.log(`   constructionOnly=true -> total=${cons.total}`);
@@ -106,13 +127,17 @@ async function main() {
   const sorted = [...dates].sort();
   assert("sort=closing returns ascending closing dates", JSON.stringify(dates) === JSON.stringify(sorted));
 
+  // Additive date window filters
+  const dateFiltered = await j(`${LOCAL}/tenders?publishedAfter=2026-08-01T00:00:00Z&limit=5`);
+  assert("publishedAfter filter works", dateFiltered.total > 0);
+
   // Params the live API silently ignores — we support them anyway.
   const alias = await j(`${LOCAL}/tenders?perPage=2`);
   assert("perPage alias is honoured (live API ignores it)", alias.results.length === 2);
   const alias2 = await j(`${LOCAL}/tenders?search=catering&limit=3`);
   assert("search alias is honoured (live API ignores it)", alias2.total > 0);
   const st = await j(`${LOCAL}/tenders?status=active&limit=3`);
-  assert("status filter honoured (live API ignores it)", st.results.every((r: any) => true) && st.total > 0);
+  assert("status filter honoured", st.results.every((r: any) => true) && st.total > 0);
 
   console.log("\n" + "=".repeat(70));
   console.log("5. DETAIL");

@@ -6,12 +6,54 @@ contract the live app already consumes, and notifies users when a tender
 matching their saved filters arrives — or a week before it expires.
 
 ```
-eTenders OCDS API ──hourly──▶ Postgres ──▶ Fastify API ──▶ tenderbase-web
-                                  │
-                                  └──▶ matcher ──▶ in-app + push + email
+eTenders OCDS API ──hourly (:17)──▶ Postgres (Neon) ──▶ Fastify API (Render) ──▶ tenderbase-web
+                                         │
+                                         └──▶ matcher ──▶ in-app + push + email
 ```
 
 The point of the product: **stop people missing out on tender opportunities.**
+
+---
+
+## Status & Operational State
+
+- **Status:** **LIVE & AUTOMATED** 🚀
+- **Cron Schedule:** GitHub Actions runs `.github/workflows/hourly.yml` at **:17 every hour** to ingest rolling 7-day tenders, match filters, and dispatch notifications.
+- **Nothing left to click** — core ingestion, matching, and API endpoints are operating automatically.
+
+---
+
+## Optional Extras (Whenever You Feel Like It)
+
+Two optional post-deployment enhancements can be configured at any time:
+
+### 1. 31-Day Backfill from Your Laptop
+
+Deepen history beyond the default 7-day rolling window:
+
+```bash
+DATABASE_URL="postgresql://user:pass@ep-pooler.region.aws.neon.tech/neondb?sslmode=require" \
+DIRECT_URL="postgresql://user:pass@ep-direct.region.aws.neon.tech/neondb?sslmode=require" \
+npm run backfill:prod
+```
+
+- **Safe & Idempotent:** Uses `upsertTender` with SHA256 content hashes — running it multiple times writes zero duplicate entries and skips unchanged rows.
+- **Why from laptop:** Sandboxed CI or cloud agent environments can hit egress or rate constraints. Running locally connects directly to Neon and backfills the full 31-day history (~5 weekly chunks, ~1,845 releases) reliably.
+
+### 2. VAPID Keys for Web Push Notifications
+
+Wire up browser Web Push notifications:
+
+```bash
+npx web-push generate-vapid-keys
+```
+
+Add the generated keys as repository secrets (**GitHub Settings → Secrets and variables → Actions**) and Render environment variables:
+- `VAPID_PUBLIC_KEY`
+- `VAPID_PRIVATE_KEY`
+- `VAPID_SUBJECT` (e.g. `mailto:ops@tenderbase.example`)
+
+When configured, matching tenders and 7-day expiry alerts will trigger real-time browser push notifications (iOS requires PWA added to Home Screen).
 
 ---
 
@@ -57,7 +99,7 @@ sudo -u postgres psql -c "CREATE DATABASE tenderbase OWNER tenderbase;"
 | `npm run build` | Compile TypeScript to `dist/` — used by production |
 | `npm run start` | Run the **compiled** API (`node dist/cli/serve.js`) — what Render runs |
 | `npm run hourly:prod` | Run the **compiled** hourly loop — what GitHub Actions runs |
-| `npm run backfill:prod` | Compiled 31-day backfill |
+| `npm run backfill:prod` | Compiled 31-day backfill (safe to run from laptop with Neon URLs) |
 | `npm run backfill` | One-off 31-day backfill from the live API |
 | `npm run ingest` | Replay cached fixtures (no network) |
 | `npm run ingest -- --live --days 7` | Fetch a fresh window |
@@ -171,24 +213,19 @@ Two consequences that shaped the design:
 
 Of the 1,845 rows in the fixture set the API lists **1,831**: 14 "Regret Letter"
 / cancellation entries are flagged `isOpportunity = false` and excluded. The
-live database keeps growing from there — the first live hourly poll took it to
-1,856 rows, 1,842 of them listable.
+live database keeps growing from there.
 
 ---
 
 ## How the hourly loop works
 
-`npm run hourly` (Render cron, minute 17 every hour, UTC):
+`npm run hourly:prod` (GitHub Actions cron `.github/workflows/hourly.yml`, minute 17 every hour, UTC):
 
-1. **Ingest** the rolling **7-day** window. Not 1 day — Treasury occasionally
-   publishes releases dated several days back. Upserts only; unchanged rows
-   are skipped via a content hash.
-2. **Match** only tenders with `firstSeenAt > lastMatchedAt` — roughly 6–10
-   per hour, not all 1,800+.
+1. **Ingest** the rolling **7-day** window. Treasury occasionally publishes releases dated several days back. Upserts only; unchanged rows are skipped via content hash.
+2. **Match** only tenders with `firstSeenAt > lastMatchedAt` — roughly 6–10 per hour.
 3. **Dispatch** in-app + web push + email.
 
-Backfill is a separate one-off (`npm run backfill`, 31 days, ~5 weekly chunks),
-never part of the hourly path.
+Backfill is a separate optional task (`npm run backfill:prod` from laptop, 31 days), never part of the hourly path.
 
 ### Why notifications don't spam
 
@@ -216,7 +253,7 @@ and reported as 0**, never recorded as a false "sent".
 
 ```bash
 npx web-push generate-vapid-keys
-# set VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT
+# set VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT as repo secrets / env vars
 ```
 
 The public key goes to the browser to create the subscription; the private key
@@ -237,119 +274,25 @@ Everything below runs at **$0/month**.
 | Piece | Where | Why there |
 |---|---|---|
 | API | **Render** free web service | Free tier covers web services |
-| Database | **Neon** free Postgres | Render's free Postgres is **deleted after 30 days** — that would take the whole tender history with it. Neon's free tier is permanent |
-| Hourly job | **GitHub Actions** | Render has **no cron jobs on the free tier** (billed from $1/month) |
+| Database | **Neon** free Postgres | Render's free Postgres is deleted after 30 days. Neon's free tier is permanent |
+| Hourly job | **GitHub Actions** (`:17` every hour) | Render has no cron jobs on free tier |
 
 ### 1. Neon (database)
 
-1. Create a free project at [neon.tech](https://neon.tech). Pick the region
-   closest to your Render region — `eu-central-1` pairs with Frankfurt.
-2. From the Console → **Connect**, copy **both** connection strings:
+1. Create a free project at [neon.tech](https://neon.tech). Region: `eu-central-1` (Frankfurt).
+2. From Console → **Connect**, copy **both** connection strings:
    - **pooled** (hostname contains `-pooler`) → `DATABASE_URL`
    - **direct** (no `-pooler`) → `DIRECT_URL`
-3. Both already carry `sslmode=require`. Paste them into Render *and* into
-   GitHub Actions secrets.
-
-**Why two strings?** Neon routes pooled connections through PgBouncer in
-transaction mode, which does not preserve the session state that DDL needs, so
-`prisma migrate deploy` has to run against the direct endpoint. `schema.prisma`
-declares `directUrl = env("DIRECT_URL")` for exactly this reason; locally both
-point at the same database and that is harmless.
-
-**Storage headroom:** the database is **12 MB** today (1,856 tenders, ~6.5 KB
-each). At the observed ~60 new tenders/day that is ~2.7 MB/week, so Neon's
-0.5 GB free tier is roughly three years of headroom.
+3. Paste both into Render *and* GitHub Actions secrets.
 
 ### 2. Render (API)
 
-Push to GitHub, then **Render Dashboard → Blueprints → New Blueprint Instance**
-and pick the repo. `render.yaml` creates one free web service. Fill in the
-`sync: false` secrets when prompted (the two Neon URLs, plus the optional
-VAPID/Resend values).
-
-Deploy pipeline: `npm ci` → `prisma generate` → `prisma migrate deploy` →
-`tsc` build → `node dist/cli/serve.js`. Migrations run inside the build
-command because `preDeployCommand` is a paid-plan feature (free tier rejects
-a blueprint that sets one); that is safe — the migrate is idempotent,
-advisory-locked, and a failed migration fails the build before the new code
-is served.
+Render Dashboard → Blueprints → New Blueprint Instance.
+Fill in `DATABASE_URL` and `DIRECT_URL` (plus optional VAPID/Resend values).
 
 ### 3. GitHub Actions (hourly job)
 
-`.github/workflows/hourly.yml` runs `npm run hourly:prod` at minute 17 of every
-hour. Add `DATABASE_URL` and `DIRECT_URL` (and any notification keys) under
-**Settings → Secrets and variables → Actions**.
-
-Free for public repositories. Private repositories get 2000 minutes/month and
-this job takes ~2 minutes, so ~730 runs/month lands around 1500.
-
-Two honest caveats:
-
-- Scheduled runs **can be delayed a few minutes** when GitHub is busy. Nothing
-  is lost — the 7-day ingest window means a late run still catches every tender
-  — but a notification can arrive a few minutes late.
-- **GitHub disables scheduled workflows after 60 days of repository
-  inactivity.** A quiet repo would silently stop the hourly poll. Push
-  occasionally, or move to Render's $1/month cron job.
-
-### 4. First data
-
-Trigger the workflow manually (**Actions → Hourly tender ingest → Run
-workflow**), or run a backfill once from Render Shell:
-
-```bash
-npm run backfill:prod      # 31 days, compiled output
-```
-
-### 5. Point the app at it
-
-Add your API's Render URL to `CORS_ORIGINS` and use it in
-`https://tenderbase-web.onrender.com`.
-
----
-
-### Free-tier trade-offs worth knowing
-
-- **Render free web services spin down after 15 minutes idle**, so the first
-  request after a quiet period takes 30–60 s.
-- **Do not add a keep-alive pinger.** It is the standard fix for Render's cold
-  starts, but here it would keep Neon's compute awake around the clock:
-  ~730 h/month × 0.25 CU ≈ **182 CU-hours against a 100 CU-hour budget**. Neon's
-  limits are *hard cutoffs*, not throttles — the database would suspend
-  mid-cycle and the app would break. These two free tiers pull in opposite
-  directions; take the cold start.
-- **Neon suspends after 5 minutes idle**; the first query after that wakes it in
-  roughly 300–500 ms.
-- **Free instances get 512 MB RAM / 0.1 CPU.** That is why production runs the
-  compiled output (`node dist/...`) instead of `tsx`, keeping memory for Prisma.
-  Local development still runs TypeScript directly.
-
-### Upgrading later
-
-| Cost | What it buys |
-|---|---|
-| $1/month | Render **cron job** — on-time hourly runs, no 60-day inactivity trap |
-| $7/month | Always-on Render web service — no cold starts |
-| Neon Launch | Beyond 0.5 GB storage, configurable scale-to-zero, 7-day PITR |
-
-### Self-hosting with Docker
-
-A `Dockerfile` is included; it builds a dist-only image with no TypeScript
-toolchain:
-
-```bash
-docker build -t tenderbase .
-docker run --rm -p 3000:10000 --env-file .env tenderbase
-
-# the hourly job from the same image
-docker run --rm --env-file .env \
-  tenderbase sh -c "npx prisma migrate deploy && node dist/cli/hourly.js"
-```
-
-Migrations run at container **start**, not build, because the database (and its
-connection strings) may not exist at build time. `prisma migrate deploy` is
-idempotent and advisory-locked, so it is safe when several instances start
-together.
+`.github/workflows/hourly.yml` runs `npm run hourly:prod` at minute 17 of every hour. Secrets configured under **Settings → Secrets and variables → Actions**.
 
 ---
 
@@ -357,12 +300,13 @@ together.
 
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
-| `DATABASE_URL` | **yes** | — | Postgres connection string |
+| `DATABASE_URL` | **yes** | — | Postgres connection string (pooled endpoint for app) |
+| `DIRECT_URL` | **yes** | — | Postgres direct connection string (for migrations) |
 | `PORT` | no | `3000` | API port (Render sets it) |
 | `HOST` | no | `0.0.0.0` | Bind address |
 | `NODE_ENV` | no | — | `production` quiets Prisma's query logging |
 | `CORS_ORIGINS` | no | `*` | Comma-separated allow-list |
-| `API_KEY` | no | — | When set, requires `X-API-Key` or `Authorization: Bearer` (except `/health`) |
+| `API_KEY` | no | — | When set, requires `X-API-Key` or `Authorization: Bearer` |
 | `VAPID_PUBLIC_KEY` | no | — | Web push; unset ⇒ push skipped |
 | `VAPID_PRIVATE_KEY` | no | — | Web push; unset ⇒ push skipped |
 | `VAPID_SUBJECT` | no | `mailto:ops@tenderbase.example` | VAPID contact |
@@ -379,20 +323,6 @@ together.
 npm run typecheck      # tsc --noEmit
 npm run test:contract  # our response shape vs the LIVE app — must be identical
 npm run notify:test    # notification behaviour
-```
-
-`scripts/contract_test.ts` fetches both the live app and our API and diffs the
-key sets, so a drift in either direction fails loudly. Current status:
-**ALL CHECKS PASSED**, zero missing keys.
-
-`scripts/notify_test.ts` covers four behaviours that matter for a
-notifications product:
-
-```
-A. repeated runs never re-notify          — before=5 after=5 created=0
-B. an extended closing date re-arms       — before=1 after=2, then stable at 2
-C. a brand-new filter set matches 0 of 1845 historical tenders
-D. no expiry alert points at a closed or non-opportunity tender
 ```
 
 ---
@@ -421,19 +351,5 @@ src/
   cli/                 serve | ingest | hourly | notify | check
 prisma/migrations/     init, FTS index, matching tables, notify_email
 fixtures/              1,845 real releases (31 days) for offline runs
-scripts/               contract_test, notify_test, verify.sql
+scripts/               contract_test, notify_test, verify.sql, retry_test
 ```
-
----
-
-## Known limitations
-
-- **`valueCents` is empty** for essentially every tender in the source feed,
-  so the field is emitted but no filtering or sorting uses it.
-- **Titles are uninformative** (92.9% are reference codes). Notification copy
-  leads with the *description* for this reason.
-- **The feed is slow** (up to 74 s per request). The hourly job takes a couple
-  of minutes; it is not suited to sub-minute polling.
-- **Sources covered** are those published to the national eTenders OCDS feed.
-  Municipal tenders published only on their own portals are out of scope.
-- Push on **iOS** requires the user to add the PWA to their Home Screen first.

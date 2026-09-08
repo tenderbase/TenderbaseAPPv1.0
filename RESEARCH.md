@@ -6,6 +6,17 @@ Raw data + scripts in `/home/user/research/`.
 
 ---
 
+## Operational Deployment Summary
+
+All research findings below have been implemented and deployed in production:
+- **Automated Ingestion:** GitHub Actions cron (`.github/workflows/hourly.yml`) runs at **:17 every hour** to ingest rolling 7-day releases.
+- **API & DB:** Fastify API running on Render, backed by Neon Postgres.
+- **Optional Extras:**
+  1. **31-Day Backfill from Laptop:** `npm run backfill:prod` with Neon `DATABASE_URL` and `DIRECT_URL`. Safe and idempotent via content hashes.
+  2. **VAPID Keys for Push:** `npx web-push generate-vapid-keys` added as repo secrets (`VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT`).
+
+---
+
 ## 1. Source availability
 
 | Source | Status | Verdict |
@@ -145,9 +156,6 @@ separate: expiry sweep — status=active AND closingDate between now and now+7d
 
 Matching only *newly seen* tenders is what keeps this cheap: ~10 tenders × N filter sets per
 hour, instead of 1,845 × N.
-
-**No Playwright.** Both sources are plain HTTP JSON — no browser, no `--no-sandbox`,
-~500 MB off the Docker image.
 
 ---
 
