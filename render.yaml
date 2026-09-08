@@ -30,10 +30,14 @@ services:
     healthCheckPath: /health
     # Verified: npm 10 installs devDependencies even with NODE_ENV=production,
     # so `tsc` is available here. If that ever changes, add `--include=dev`.
-    buildCommand: npm ci && npx prisma generate && npm run build
-    # Runs against DIRECT_URL (Neon's unpooled endpoint) via `directUrl` in
-    # schema.prisma — DDL does not survive PgBouncer's transaction mode.
-    preDeployCommand: npx prisma migrate deploy
+    #
+    # Migrations run IN THE BUILD, not in a preDeployCommand: pre-deploy
+    # commands are a paid-plan feature, and free tier rejects the blueprint
+    # outright if one is set. Service env vars (incl. sync: false secrets) are
+    # available at build time, and `migrate deploy` is idempotent and
+    # advisory-locked, so running it on every build is safe — a failed
+    # migration fails the build before the new code is ever served.
+    buildCommand: npm ci && npx prisma generate && npx prisma migrate deploy && npm run build
     # Compiled output, not tsx: a free instance gets 512 MB RAM and loading the
     # TypeScript transform machinery at runtime is memory we would rather spend
     # on Prisma.
