@@ -3,7 +3,8 @@
 // (see RESEARCH.md section 2), so the API layer stays a thin pass-through.
 
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  previewFeatures = ["driverAdapters"]
 }
 
 datasource db {

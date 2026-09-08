@@ -4,9 +4,8 @@ import type { Tender, TenderDocument } from "@prisma/client";
  * Shape the live TenderBase app already consumes. Field names here are
  * load-bearing — changing one silently breaks the app.
  *
- * Differences from the current live API (all deliberate improvements backed by
- * RESEARCH.md): `category` is now real (was 97% "Other"), `contactInformation`
- * is populated (was 0%), and `isOpportunity` false entries are hidden.
+ * All original contract fields are guaranteed. Extra additive fields are
+ * included to facilitate frontend ingestion and detail views.
  */
 export interface ContractDocument {
   id: string;
@@ -37,13 +36,37 @@ export interface ContractTender {
   isSaved: boolean;
   savedAt: null;
   matchScore: null;
+
+  // Additive metadata fields for rich frontend ingestion
+  status?: string | null;
+  cidbGrade?: string | null;
+  cidbGradeRaw?: string | null;
+  contactName?: string | null;
+  contactEmail?: string | null;
+  contactPhone?: string | null;
+  firstSeenAt?: string | null;
 }
 
 export function toContractTender(
-  row: Tender,
+  row: Tender | any,
   documents: TenderDocument[]
 ): ContractTender {
   const hasContact = !!(row.contactName || row.contactEmail || row.contactPhone);
+
+  const formatPubDate = (val: any) => {
+    if (!val) return null;
+    if (typeof val === "string") return val.slice(0, 10);
+    if (val instanceof Date) return val.toISOString().slice(0, 10);
+    return String(val).slice(0, 10);
+  };
+
+  const formatIsoDate = (val: any) => {
+    if (!val) return null;
+    if (typeof val === "string") return val;
+    if (val instanceof Date) return val.toISOString();
+    return String(val);
+  };
+
   return {
     id: row.id,
     tenderNumber: row.tenderNumber,
@@ -54,11 +77,9 @@ export function toContractTender(
     category: row.category,
     province: row.province,
     location: row.location,
-    valueCents: row.valueCents === null ? null : Number(row.valueCents),
-    // The live API returns publishedDate as a date and closingDate as a full
-    // ISO timestamp. Match that exactly.
-    publishedDate: row.publishedDate ? row.publishedDate.toISOString().slice(0, 10) : null,
-    closingDate: row.closingDate ? row.closingDate.toISOString() : null,
+    valueCents: row.valueCents === null || row.valueCents === undefined ? null : Number(row.valueCents),
+    publishedDate: formatPubDate(row.publishedDate),
+    closingDate: formatIsoDate(row.closingDate),
     sourceUrl: row.sourceUrl,
     documents: documents.map((d) => ({
       id: d.id,
@@ -70,10 +91,19 @@ export function toContractTender(
       isAddendum: d.isAddendum,
     })),
     contactInformation: hasContact
-      ? { name: row.contactName, email: row.contactEmail, telephone: row.contactPhone }
+      ? { name: row.contactName ?? null, email: row.contactEmail ?? null, telephone: row.contactPhone ?? null }
       : null,
     isSaved: false,
     savedAt: null,
     matchScore: null,
+
+    // Additive metadata
+    status: row.status ?? null,
+    cidbGrade: row.cidbGrade ?? null,
+    cidbGradeRaw: row.cidbGradeRaw ?? null,
+    contactName: row.contactName ?? null,
+    contactEmail: row.contactEmail ?? null,
+    contactPhone: row.contactPhone ?? null,
+    firstSeenAt: formatIsoDate(row.firstSeenAt),
   };
 }

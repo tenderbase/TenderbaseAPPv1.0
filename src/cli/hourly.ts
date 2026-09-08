@@ -1,5 +1,5 @@
 /**
- * The core product loop. Render's cron job runs this once an hour.
+ * The core product loop. GitHub Actions runs this once an hour at :17 UTC.
  *
  *   1. INGEST  — pull the rolling 7-day window from the live OCDS API.
  *                Upserts; skips the write when the content hash is unchanged.
