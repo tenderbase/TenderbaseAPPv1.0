@@ -12,6 +12,7 @@
     "ingest": "tsx src/cli/ingest.ts",
     "serve": "tsx src/cli/serve.ts",
     "test:contract": "tsx scripts/contract_test.ts",
+    "test:retry": "tsx scripts/retry_test.ts",
     "notify": "tsx src/cli/notify.ts",
     "typecheck": "tsc --noEmit",
     "notify:test": "tsx scripts/notify_test.ts",

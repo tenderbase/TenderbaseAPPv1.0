@@ -21,6 +21,11 @@ on:
     # Minute 17 rather than 0: everyone's cron fires on the hour and GitHub
     # delays scheduled runs under load. GitHub evaluates cron in UTC.
     - cron: "17 * * * *"
+  push:
+    # Self-validation: every merge to main runs the real pipeline once, so a
+    # broken deploy surfaces immediately instead of at the top of the hour.
+    # Everything is idempotent (upsert + alert dedupe), so extra runs are free.
+    branches: [main]
   workflow_dispatch: # allows a manual run from the Actions tab
 
 concurrency:
