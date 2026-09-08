@@ -267,8 +267,12 @@ and pick the repo. `render.yaml` creates one free web service. Fill in the
 `sync: false` secrets when prompted (the two Neon URLs, plus the optional
 VAPID/Resend values).
 
-Deploy pipeline: `npm ci` → `prisma generate` → `tsc` build →
-`prisma migrate deploy` (pre-deploy hook) → `node dist/cli/serve.js`.
+Deploy pipeline: `npm ci` → `prisma generate` → `prisma migrate deploy` →
+`tsc` build → `node dist/cli/serve.js`. Migrations run inside the build
+command because `preDeployCommand` is a paid-plan feature (free tier rejects
+a blueprint that sets one); that is safe — the migrate is idempotent,
+advisory-locked, and a failed migration fails the build before the new code
+is served.
 
 ### 3. GitHub Actions (hourly job)
 
