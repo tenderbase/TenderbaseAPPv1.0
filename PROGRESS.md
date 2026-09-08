@@ -276,3 +276,37 @@ push to GitHub, apply the Blueprint in Render, add the same two Neon URLs as
 GitHub Actions secrets, then trigger the hourly workflow once (or run
 `npm run backfill:prod`) to load the first 31 days. Optional: VAPID keys via
 `npx web-push generate-vapid-keys` and a Resend key to switch on push + email.
+
+---
+
+## 2026-09-08 · Live — and hardened against SITA DNS flaps
+
+**Went live.** Render service + Neon DB + GitHub Actions cron, all on free
+tiers. First successful hourly run took ~5 min (migrate + 7-day ingest + match
++ dispatch) and the API immediately served real data: 50 KwaZulu-Natal tenders,
+7 full-text hits for `q=catering`.
+
+**Incident worth remembering.** One run failed with `TypeError: fetch failed` —
+undici's wrapper around `ENOTFOUND`. Root cause: the authoritative nameservers
+for `etenders.gov.za` (SITA, `164.151.132.39/.40`) flap — Google DNS logged
+"Name servers did not respond" at 21:08 UTC, and the same server answered
+cleanly at 21:12. The old retry schedule (3 attempts, 1-2s apart) burned every
+attempt inside one bad moment. Verified by querying `dns.google/resolve`
+during the outage; the API host itself (`164.151.136.188`) was never down.
+
+Fix (`src/sources/ocds.ts` + `src/config.ts`):
+
+- Two-tier retries — HTTP errors keep the fast 3x1-2s schedule; network errors
+  (DNS/TCP/TLS/timeout) get up to 6 attempts spread over ~2.5 minutes, inside a
+  9-minute per-page deadline that protects the job's 20-minute budget.
+- `describeError()` flattens the error chain, so logs now read
+  `ENOTFOUND: getaddrinfo ...` instead of the useless wrapper.
+- `npm run test:retry` (scripts/retry_test.ts) pins the behaviour with a
+  stubbed fetch: recovery after transient DNS failures, fast-fail on HTTP
+  errors, and correct tier accounting when both occur.
+- The workflow gained a `push: [main]` trigger so every merge self-validates
+  with a real pipeline run.
+
+**Not done:** the 31-day backfill (`npm run backfill:prod` from a laptop —
+the eTenders API is unreachable from sandboxed CI/agent environments that
+don't allow arbitrary egress).

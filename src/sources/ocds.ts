@@ -2,7 +2,9 @@ import {
   OCDS_BASE,
   USER_AGENT,
   REQUEST_TIMEOUT_MS,
-  MAX_RETRIES,
+  HTTP_RETRY_DELAYS_MS,
+  NET_RETRY_DELAYS_MS,
+  GET_JSON_DEADLINE_MS,
   MAX_PAGES,
   REQUEST_DELAY_MS,
 } from "../config.js";
@@ -27,9 +29,40 @@ export interface OcdsRelease {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * Flatten an error chain into one readable line. undici wraps the real cause
+ * (e.g. `ENOTFOUND`) inside `TypeError: fetch failed`.cause — printing only
+ * the wrapper is how a DNS outage masquerades as an opaque "fetch failed".
+ */
+function describeError(err: unknown): string {
+  const parts: string[] = [];
+  for (let e: any = err; e && parts.length < 5; e = e.cause) {
+    parts.push(e.code ? `${e.code}: ${e.message}` : `${e.name}: ${e.message ?? e}`);
+  }
+  return parts.join(" <- ") || String(err);
+}
+
+/**
+ * GET one page as JSON with a two-tier retry policy:
+ *
+ *  - HTTP errors (400/503/...) rarely fix themselves: 3 attempts, 1-2s apart.
+ *  - Network errors (DNS/TCP/TLS) usually do — the .gov.za nameservers flap
+ *    in bursts of seconds-to-minutes, and a failed lookup returns instantly,
+ *    so the old 3x1-2s schedule burned every attempt inside one bad moment.
+ *    Network failures get up to 6 attempts spread over ~2.5 minutes.
+ *
+ * A per-page deadline caps both paths so a hanging endpoint cannot consume
+ * the Actions job's 20-minute budget.
+ */
 async function getJson(url: string): Promise<any> {
-  let lastErr: unknown;
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+  const deadline = Date.now() + GET_JSON_DEADLINE_MS;
+  let attempts = 0;
+  let httpFails = 0;
+  let netFails = 0;
+  const seen = new Set<string>(); // distinct failures, for the final message
+
+  for (;;) {
+    attempts++;
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort(), REQUEST_TIMEOUT_MS);
     try {
@@ -37,18 +70,30 @@ async function getJson(url: string): Promise<any> {
         headers: { "User-Agent": USER_AGENT, Accept: "application/json" },
         signal: ac.signal,
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
-      return await res.json();
+      if (res.ok) return await res.json();
+
+      // HTTP tier, counted separately so a flapping 503 does not eat the
+      // (much longer) network budget.
+      const err = new Error(`HTTP ${res.status} for ${url}`);
+      seen.add(describeError(err));
+      const wait = HTTP_RETRY_DELAYS_MS[httpFails++];
+      if (wait === undefined || Date.now() + wait > deadline) break;
+      await sleep(wait);
     } catch (err) {
-      lastErr = err;
-      if (attempt < MAX_RETRIES) {
-        await sleep(1000 * Math.pow(2, attempt - 1));
-      }
+      // Network tier: DNS lookups, TCP connects, TLS handshakes, timeouts.
+      seen.add(describeError(err));
+      const wait = NET_RETRY_DELAYS_MS[netFails++];
+      if (wait === undefined || Date.now() + wait > deadline) break;
+      await sleep(wait);
     } finally {
       clearTimeout(timer);
     }
   }
-  throw new Error(`OCDS fetch failed after ${MAX_RETRIES} attempts: ${String(lastErr)}`);
+
+  throw new Error(
+    `OCDS fetch failed after ${attempts} attempt(s) ` +
+      `(${httpFails} http, ${netFails} network): ${[...seen].join(" | ")}`
+  );
 }
 
 export interface FetchRangeResult {
