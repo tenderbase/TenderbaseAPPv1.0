@@ -1,7 +1,7 @@
 // Central configuration. Every value here was validated against the live API
 // during research — see /home/user/RESEARCH.md for the measurements behind them.
 
-export const OCDS_BASE = "https://ocds-api.etenders.gov.za/api/OCDSReleases";
+export const OCDS_BASE = "https://ocds-api.etenders.gov.za/api/ocdsreleases";
 
 // Identify ourselves honestly: the feed is public open data and we are polite.
 export const USER_AGENT =
