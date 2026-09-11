@@ -5,11 +5,16 @@ import { cleanText, parseDate, extractCidbGrade } from "../normalise.js";
 export const ETHEKWINI_SOURCE = "ETHEKWINI";
 export const ETHEKWINI_BASE_URL = "https://durban.gov.za/pages/business/procurement";
 
+// eThekwini publishes the same procurement content on several official
+// subdomains. GitHub-hosted runners have recently timed out against the main
+// hostname, so try the official mirrors before using the transport fallback.
 const OFFICIAL_BASE_URLS = [
-  "https://durban.gov.za/pages/business/procurement",
+  "https://tenders.durban.gov.za/pages/business/procurement",
+  "https://market.durban.gov.za/pages/business/procurement",
   "https://stats.durban.gov.za/pages/business/procurement",
   "https://economic.durban.gov.za/pages/business/procurement",
   "https://dag.durban.gov.za/pages/business/procurement",
+  ETHEKWINI_BASE_URL,
 ];
 
 const READER_BASE_URL = "https://r.jina.ai/";
@@ -186,13 +191,11 @@ function sleep(ms: number): Promise<void> {
 
 async function fetchWithTimeout(url: string, options: RequestInit): Promise<Response> {
   const controller = new AbortController();
-  const connectTimer = setTimeout(() => controller.abort(), CONNECT_TIMEOUT_MS);
-  const responseTimer = setTimeout(() => controller.abort(), RESPONSE_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), RESPONSE_TIMEOUT_MS);
   try {
     return await fetch(url, { ...options, signal: controller.signal });
   } finally {
-    clearTimeout(connectTimer);
-    clearTimeout(responseTimer);
+    clearTimeout(timer);
   }
 }
 
@@ -203,7 +206,10 @@ async function fetchDirect(url: string): Promise<{ html: string; baseUrl: string
       const response = await fetchWithTimeout(url, {
         headers: { accept: "text/html,application/xhtml+xml", "user-agent": USER_AGENT },
       });
-      if (response.ok) return { html: await response.text(), baseUrl: new URL(url).origin + new URL(url).pathname };
+      if (response.ok) {
+        const parsed = new URL(url);
+        return { html: await response.text(), baseUrl: parsed.origin + parsed.pathname };
+      }
       lastError = new Error(`HTTP ${response.status}`);
     } catch (error) {
       lastError = error;
@@ -224,7 +230,8 @@ async function fetchViaReader(officialUrl: string): Promise<{ html: string; base
     },
   });
   if (!response.ok) throw new Error(`Reader fallback returned HTTP ${response.status}`);
-  return { html: await response.text(), baseUrl: new URL(officialUrl).origin + new URL(officialUrl).pathname };
+  const parsed = new URL(officialUrl);
+  return { html: await response.text(), baseUrl: parsed.origin + parsed.pathname };
 }
 
 async function fetchPage(page: number): Promise<{ html: string; baseUrl: string; fetchedUrl: string }> {
@@ -244,10 +251,10 @@ async function fetchPage(page: number): Promise<{ html: string; baseUrl: string;
     }
   }
 
-  // The official site has recently been reachable to public crawlers while
-  // timing out from GitHub-hosted runners. Use Jina Reader only as a transport
-  // fallback; parsing and provenance remain anchored to the official URL.
-  const canonicalUrl = urls[0]!;
+  // Official public crawlers are currently seeing the procurement data while
+  // GitHub-hosted runners can time out against the municipality edge. Reader
+  // is only a transport fallback; provenance URLs remain official eThekwini.
+  const canonicalUrl = urls.at(-1)!;
   try {
     const result = await fetchViaReader(canonicalUrl);
     return { ...result, fetchedUrl: `reader:${canonicalUrl}` };
