@@ -1,0 +1,39 @@
+name: Municipality tender ingest
+
+on:
+  schedule:
+    - cron: "37 * * * *"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: municipality-ingest
+  cancel-in-progress: false
+
+jobs:
+  ethekwini:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - run: npm ci
+      - run: npx prisma generate
+      - run: npm run build
+      - name: Apply pending migrations
+        run: npx prisma migrate deploy
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DIRECT_URL: ${{ secrets.DIRECT_URL }}
+      - name: Parse fixture
+        run: npm run test:ethekwini
+      - name: Ingest eThekwini
+        run: npm run ingest:municipality:prod
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DIRECT_URL: ${{ secrets.DIRECT_URL }}
+          NODE_ENV: production
