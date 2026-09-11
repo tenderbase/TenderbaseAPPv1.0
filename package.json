@@ -10,6 +10,7 @@
   "scripts": {
     "check": "tsx src/cli/check.ts",
     "ingest": "tsx src/cli/ingest.ts",
+    "ingest:municipality": "tsx src/cli/municipality.ts",
     "serve": "tsx src/cli/serve.ts",
     "test:contract": "tsx scripts/contract_test.ts",
     "test:retry": "tsx scripts/retry_test.ts",
@@ -22,7 +23,8 @@
     "start": "node dist/cli/serve.js",
     "build": "tsc -p tsconfig.json",
     "hourly:prod": "node dist/cli/hourly.js",
-    "backfill:prod": "node dist/cli/ingest.js --backfill --live --days 31"
+    "backfill:prod": "node dist/cli/ingest.js --backfill --live --days 31",
+    "ingest:municipality:prod": "node dist/cli/municipality.js"
   },
   "dependencies": {
     "@fastify/cors": "^11.3.0",
@@ -34,7 +36,6 @@
     "@types/web-push": "^3.6.4",
     "fastify": "^5.12.3",
     "pg": "^8.23.0",
-    "prisma": "^6.19.3",
     "web-push": "^3.6.7",
     "zod": "^3.23.8"
   },
