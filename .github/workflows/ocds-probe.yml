@@ -14,24 +14,33 @@ jobs:
         run: |
           set +e
           base='https://ocds-api.etenders.gov.za'
+          echo "===== DNS ====="
+          getent hosts ocds-api.etenders.gov.za || true
           for path in \
             '/api/OCDSReleases' \
             '/api/ocdsreleases' \
             '/api/OCDSReleases/' \
             '/api/ocdsreleases/'; do
             echo "===== $path ====="
-            curl --http1.1 -L --max-time 60 -sS -o /tmp/body -w 'HTTP %{http_code}\n' \
+            curl --http1.1 -L --max-time 60 -sS -D /tmp/headers -o /tmp/body -w 'HTTP %{http_code} FINAL %{url_effective}\n' \
               -H 'Accept: application/json' \
               -A 'TenderBase/0.1' \
-              "$base$path?PageNumber=1&PageSize=1&dateFrom=2026-09-01T00:00:00Z&dateTo=2026-09-12T23:59:59Z"
-            head -c 500 /tmp/body; echo
+              "$base$path?PageNumber=1&PageSize=1&dateFrom=2026-09-01&dateTo=2026-09-12"
+            echo '--- headers ---'
+            cat /tmp/headers | head -30
+            echo '--- body ---'
+            head -c 1000 /tmp/body; echo
           done
 
       - name: Probe documented Swagger endpoint
         shell: bash
         run: |
-          curl --http1.1 -L --max-time 60 -sS -o /tmp/swagger \
-            -w 'Swagger HTTP %{http_code}\n' \
+          set +e
+          curl --http1.1 -L --max-time 60 -sS -D /tmp/swagger-headers -o /tmp/swagger \
+            -w 'Swagger HTTP %{http_code} FINAL %{url_effective}\n' \
             -A 'TenderBase/0.1' \
             'https://ocds-api.etenders.gov.za/swagger/v1/swagger.json'
-          head -c 300 /tmp/swagger; echo
+          echo '--- swagger headers ---'
+          cat /tmp/swagger-headers | head -30
+          echo '--- swagger body ---'
+          head -c 500 /tmp/swagger; echo
