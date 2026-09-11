@@ -5,8 +5,20 @@ import { cleanText, parseDate, extractCidbGrade } from "../normalise.js";
 export const ETHEKWINI_SOURCE = "ETHEKWINI";
 export const ETHEKWINI_BASE_URL = "https://durban.gov.za/pages/business/procurement";
 
+const OFFICIAL_BASE_URLS = [
+  "https://durban.gov.za/pages/business/procurement",
+  "https://stats.durban.gov.za/pages/business/procurement",
+  "https://economic.durban.gov.za/pages/business/procurement",
+  "https://dag.durban.gov.za/pages/business/procurement",
+];
+
+const READER_BASE_URL = "https://r.jina.ai/";
 const USER_AGENT = "TenderBase/1.0 (+https://tenderbase-web.onrender.com/)";
 const MAX_PAGES = 50;
+const CONNECT_TIMEOUT_MS = 20_000;
+const RESPONSE_TIMEOUT_MS = 60_000;
+const ATTEMPTS_PER_SOURCE = 2;
+const RETRY_DELAYS_MS = [2_000, 5_000];
 
 function decodeHtml(input: string): string {
   return input
@@ -98,7 +110,7 @@ function extractDocuments(htmlBlock: string, baseUrl: string): TenderDocument[] 
   return out;
 }
 
-function blockToTender(block: string, htmlBlock: string, page: number): NormalisedTender | null {
+function blockToTender(block: string, htmlBlock: string, page: number, sourceBaseUrl = ETHEKWINI_BASE_URL): NormalisedTender | null {
   const reference = findReference(block);
   const title = findTitle(block);
   if (!reference || !title) return null;
@@ -110,7 +122,7 @@ function blockToTender(block: string, htmlBlock: string, page: number): Normalis
   const contactPhone = findField(block, "Contact Number");
   const contactEmail = findField(block, "Email");
   const category = cleanText(block.match(/General\s+·\s+([^\n]+)/i)?.[1] ?? "Municipal Procurement");
-  const documents = extractDocuments(htmlBlock, ETHEKWINI_BASE_URL);
+  const documents = extractDocuments(htmlBlock, sourceBaseUrl);
   const sourceUrl = `${ETHEKWINI_BASE_URL}?page=${page}#${encodeURIComponent(reference)}`;
   const cidb = extractCidbGrade(title, description);
   const contentHash = createHash("sha256")
@@ -144,7 +156,7 @@ function blockToTender(block: string, htmlBlock: string, page: number): Normalis
   };
 }
 
-export function parseEThekwiniPage(html: string, page = 1): NormalisedTender[] {
+export function parseEThekwiniPage(html: string, page = 1, sourceBaseUrl = ETHEKWINI_BASE_URL): NormalisedTender[] {
   const markers = [...html.matchAll(/<[^>]*>\s*Tender\s*<\/?[^>]*>/gi)].map((m) => m.index ?? 0);
   const starts = markers.length ? markers : [...html.matchAll(/\bTender\b/gi)].map((m) => m.index ?? 0);
   const tenders: NormalisedTender[] = [];
@@ -155,7 +167,7 @@ export function parseEThekwiniPage(html: string, page = 1): NormalisedTender[] {
     const htmlBlock = html.slice(start, end);
     const block = stripHtml(htmlBlock);
     if (!/Reference\s+/i.test(block)) continue;
-    const tender = blockToTender(block, htmlBlock, page);
+    const tender = blockToTender(block, htmlBlock, page, sourceBaseUrl);
     if (tender) tenders.push(tender);
   }
 
@@ -168,15 +180,82 @@ export function parseEThekwiniPage(html: string, page = 1): NormalisedTender[] {
   });
 }
 
-async function fetchPage(page: number): Promise<string> {
-  const url = new URL(ETHEKWINI_BASE_URL);
-  if (page > 1) url.searchParams.set("page", String(page));
-  const response = await fetch(url, {
-    headers: { accept: "text/html,application/xhtml+xml", "user-agent": USER_AGENT },
-    signal: AbortSignal.timeout(30_000),
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchWithTimeout(url: string, options: RequestInit): Promise<Response> {
+  const controller = new AbortController();
+  const connectTimer = setTimeout(() => controller.abort(), CONNECT_TIMEOUT_MS);
+  const responseTimer = setTimeout(() => controller.abort(), RESPONSE_TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(connectTimer);
+    clearTimeout(responseTimer);
+  }
+}
+
+async function fetchDirect(url: string): Promise<{ html: string; baseUrl: string }> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < ATTEMPTS_PER_SOURCE; attempt += 1) {
+    try {
+      const response = await fetchWithTimeout(url, {
+        headers: { accept: "text/html,application/xhtml+xml", "user-agent": USER_AGENT },
+      });
+      if (response.ok) return { html: await response.text(), baseUrl: new URL(url).origin + new URL(url).pathname };
+      lastError = new Error(`HTTP ${response.status}`);
+    } catch (error) {
+      lastError = error;
+    }
+    if (attempt < ATTEMPTS_PER_SOURCE - 1) await sleep(RETRY_DELAYS_MS[attempt]!);
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
+async function fetchViaReader(officialUrl: string): Promise<{ html: string; baseUrl: string }> {
+  const readerUrl = `${READER_BASE_URL}${officialUrl}`;
+  const response = await fetchWithTimeout(readerUrl, {
+    headers: {
+      accept: "text/html,application/xhtml+xml",
+      "user-agent": USER_AGENT,
+      "x-respond-with": "html",
+      "x-timeout": "30",
+    },
   });
-  if (!response.ok) throw new Error(`eThekwini procurement page ${page} returned HTTP ${response.status}`);
-  return response.text();
+  if (!response.ok) throw new Error(`Reader fallback returned HTTP ${response.status}`);
+  return { html: await response.text(), baseUrl: new URL(officialUrl).origin + new URL(officialUrl).pathname };
+}
+
+async function fetchPage(page: number): Promise<{ html: string; baseUrl: string; fetchedUrl: string }> {
+  const urls = OFFICIAL_BASE_URLS.map((base) => {
+    const url = new URL(base);
+    if (page > 1) url.searchParams.set("page", String(page));
+    return url.toString();
+  });
+
+  const errors: string[] = [];
+  for (const url of urls) {
+    try {
+      const result = await fetchDirect(url);
+      return { ...result, fetchedUrl: url };
+    } catch (error) {
+      errors.push(`${url}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  // The official site has recently been reachable to public crawlers while
+  // timing out from GitHub-hosted runners. Use Jina Reader only as a transport
+  // fallback; parsing and provenance remain anchored to the official URL.
+  const canonicalUrl = urls[0]!;
+  try {
+    const result = await fetchViaReader(canonicalUrl);
+    return { ...result, fetchedUrl: `reader:${canonicalUrl}` };
+  } catch (error) {
+    errors.push(`reader:${canonicalUrl}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  throw new Error(`eThekwini procurement page ${page} unavailable. ${errors.join(" | ")}`);
 }
 
 export async function fetchEThekwiniOpenTenders(): Promise<{ tenders: NormalisedTender[]; pages: number }> {
@@ -185,8 +264,8 @@ export async function fetchEThekwiniOpenTenders(): Promise<{ tenders: Normalised
   let pages = 0;
 
   for (let page = 1; page <= MAX_PAGES; page += 1) {
-    const html = await fetchPage(page);
-    const tenders = parseEThekwiniPage(html, page);
+    const fetched = await fetchPage(page);
+    const tenders = parseEThekwiniPage(fetched.html, page, fetched.baseUrl);
     pages += 1;
     if (!tenders.length) break;
 
