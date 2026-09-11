@@ -8,11 +8,6 @@ export const ETHEKWINI_BASE_URL = "https://durban.gov.za/pages/business/procurem
 const USER_AGENT = "TenderBase/1.0 (+https://tenderbase-web.onrender.com/)";
 const MAX_PAGES = 50;
 
-export interface EThekwiniTenderSummary {
-  tender: NormalisedTender;
-  page: number;
-}
-
 function decodeHtml(input: string): string {
   return input
     .replace(/&nbsp;/gi, " ")
@@ -49,19 +44,13 @@ function absoluteUrl(href: string, baseUrl: string): string {
   }
 }
 
-function attr(tag: string, name: string): string | null {
-  const re = new RegExp(`${name}\\s*=\\s*["']([^"']+)["']`, "i");
-  return tag.match(re)?.[1] ?? null;
-}
-
 function parseClosingDate(text: string): string | null {
   const m = text.match(/Closing\s+(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}:\d{2})/i);
   if (!m) return null;
   const month = Number(m[1]);
   const day = Number(m[2]);
   const year = Number(m[3]);
-  const time = m[4];
-  const iso = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}T${time}:00+02:00`;
+  const iso = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}T${m[4]}:00+02:00`;
   return parseDate(iso);
 }
 
@@ -75,13 +64,16 @@ function findReference(block: string): string | null {
 }
 
 function findTitle(block: string): string | null {
-  const lines = block.split("\n").map((x) => cleanText(x)).filter((x): x is string => !!x);
+  const lines = block.split("\n").map(cleanText).filter((x): x is string => !!x);
+  const categoryIndex = lines.findIndex((x) => /^General\s+·/i.test(x));
+  if (categoryIndex > 0) return lines[categoryIndex - 1] ?? null;
+
   const refIndex = lines.findIndex((x) => /^Reference\s+/i.test(x));
   if (refIndex < 0) return null;
-  const candidates = lines.slice(Math.max(0, refIndex - 6), refIndex).filter(
-    (x) => !/^Tender$/i.test(x) && !/^\d+ tenders$/i.test(x) && !/^\d{4}$/i.test(x) && !/^(January|February|March|April|May|June|July|August|September|October|November|December)$/i.test(x)
-  );
-  return candidates.at(-1) ?? null;
+  return lines
+    .slice(Math.max(0, refIndex - 6), refIndex)
+    .filter((x) => !/^Tender$/i.test(x) && !/^\d+ tenders$/i.test(x) && !/^\d{4}$/i.test(x))
+    .at(-1) ?? null;
 }
 
 function extractDocuments(htmlBlock: string, baseUrl: string): TenderDocument[] {
@@ -90,7 +82,7 @@ function extractDocuments(htmlBlock: string, baseUrl: string): TenderDocument[] 
   for (const m of htmlBlock.matchAll(re)) {
     const href = absoluteUrl(m[1]!, baseUrl);
     const label = cleanText(stripHtml(m[2]!));
-    if (!/\.(pdf|docx?|xlsx?|xls)(?:\?|#|$)/i.test(href) && !/\.pdf/i.test(label ?? "")) continue;
+    if (!/\.(pdf|docx?|xlsx?)(?:\?|#|$)/i.test(href) && !/\.pdf/i.test(label ?? "")) continue;
     const fileName = decodeURIComponent(href.split("/").pop()?.split("?")[0] ?? "");
     const name = label || fileName || null;
     const ext = (fileName.match(/\.([a-z0-9]+)$/i)?.[1] ?? "").toLowerCase();
@@ -101,12 +93,7 @@ function extractDocuments(htmlBlock: string, baseUrl: string): TenderDocument[] 
       xls: "APPLICATION/VND.MS-EXCEL",
       xlsx: "APPLICATION/VND.OPENXMLFORMATS-OFFICEDOCUMENT.SPREADSHEET",
     };
-    out.push({
-      name,
-      url: href,
-      fileType: types[ext] ?? null,
-      isAddendum: /addendum|amendment|clarification|q.?a/i.test(name ?? ""),
-    });
+    out.push({ name, url: href, fileType: types[ext] ?? null, isAddendum: /addendum|amendment|clarification|q.?a/i.test(name ?? "") });
   }
   return out;
 }
@@ -122,12 +109,10 @@ function blockToTender(block: string, htmlBlock: string, page: number): Normalis
   const contactName = findField(block, "Contact Person");
   const contactPhone = findField(block, "Contact Number");
   const contactEmail = findField(block, "Email");
-  const categoryLine = block.match(/General\s+·\s+([^\n]+)/i)?.[1] ?? "Municipal Procurement";
-  const category = cleanText(categoryLine);
+  const category = cleanText(block.match(/General\s+·\s+([^\n]+)/i)?.[1] ?? "Municipal Procurement");
   const documents = extractDocuments(htmlBlock, ETHEKWINI_BASE_URL);
   const sourceUrl = `${ETHEKWINI_BASE_URL}?page=${page}#${encodeURIComponent(reference)}`;
   const cidb = extractCidbGrade(title, description);
-
   const contentHash = createHash("sha256")
     .update(JSON.stringify({ title, description, organisation, category, closingDate, contactName, contactEmail, contactPhone, documents: documents.map((d) => d.url) }))
     .digest("hex");
@@ -159,12 +144,6 @@ function blockToTender(block: string, htmlBlock: string, page: number): Normalis
   };
 }
 
-/**
- * Parse the public eThekwini corporate procurement page. The municipality
- * currently renders tender cards server-side, while document links are normal
- * HTML anchors. We deliberately keep this adapter dependency-free so a site
- * redesign does not force a shared scraper dependency into every municipality.
- */
 export function parseEThekwiniPage(html: string, page = 1): NormalisedTender[] {
   const markers = [...html.matchAll(/<[^>]*>\s*Tender\s*<\/?[^>]*>/gi)].map((m) => m.index ?? 0);
   const starts = markers.length ? markers : [...html.matchAll(/\bTender\b/gi)].map((m) => m.index ?? 0);
@@ -182,8 +161,9 @@ export function parseEThekwiniPage(html: string, page = 1): NormalisedTender[] {
 
   const seen = new Set<string>();
   return tenders.filter((t) => {
-    if (seen.has(t.tenderNumber.toUpperCase())) return false;
-    seen.add(t.tenderNumber.toUpperCase());
+    const key = t.tenderNumber.toUpperCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
     return true;
   });
 }
@@ -218,7 +198,6 @@ export async function fetchEThekwiniOpenTenders(): Promise<{ tenders: Normalised
       all.push(tender);
       added += 1;
     }
-
     if (added === 0) break;
   }
 
