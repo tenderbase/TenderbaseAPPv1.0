@@ -1,0 +1,37 @@
+name: OCDS endpoint probe
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe documented OCDS endpoint variants
+        shell: bash
+        run: |
+          set +e
+          base='https://ocds-api.etenders.gov.za'
+          for path in \
+            '/api/OCDSReleases' \
+            '/api/ocdsreleases' \
+            '/api/OCDSReleases/' \
+            '/api/ocdsreleases/'; do
+            echo "===== $path ====="
+            curl --http1.1 -L --max-time 60 -sS -o /tmp/body -w 'HTTP %{http_code}\n' \
+              -H 'Accept: application/json' \
+              -A 'TenderBase/0.1' \
+              "$base$path?PageNumber=1&PageSize=1&dateFrom=2026-09-01T00:00:00Z&dateTo=2026-09-12T23:59:59Z"
+            head -c 500 /tmp/body; echo
+          done
+
+      - name: Probe documented Swagger endpoint
+        shell: bash
+        run: |
+          curl --http1.1 -L --max-time 60 -sS -o /tmp/swagger \
+            -w 'Swagger HTTP %{http_code}\n' \
+            -A 'TenderBase/0.1' \
+            'https://ocds-api.etenders.gov.za/swagger/v1/swagger.json'
+          head -c 300 /tmp/swagger; echo
