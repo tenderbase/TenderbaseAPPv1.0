@@ -32,12 +32,9 @@ export interface ContractTender {
   sourceUrl: string;
   documents: ContractDocument[];
   contactInformation: { name: string | null; email: string | null; telephone: string | null } | null;
-  // Per-user state — owned by the app's auth layer, not this API.
   isSaved: boolean;
   savedAt: null;
   matchScore: null;
-
-  // Additive metadata fields for rich frontend ingestion
   status?: string | null;
   cidbGrade?: string | null;
   cidbGradeRaw?: string | null;
@@ -45,6 +42,9 @@ export interface ContractTender {
   contactEmail?: string | null;
   contactPhone?: string | null;
   firstSeenAt?: string | null;
+  procurementType?: string | null;
+  municipalityCode?: string | null;
+  municipalityName?: string | null;
 }
 
 export function toContractTender(
@@ -71,7 +71,6 @@ export function toContractTender(
     id: row.id,
     tenderNumber: row.tenderNumber,
     title: row.title,
-    // 92.9% of titles are bare reference codes — description carries the meaning.
     description: row.description,
     organisation: row.organisation,
     category: row.category,
@@ -96,8 +95,6 @@ export function toContractTender(
     isSaved: false,
     savedAt: null,
     matchScore: null,
-
-    // Additive metadata
     status: row.status ?? null,
     cidbGrade: row.cidbGrade ?? null,
     cidbGradeRaw: row.cidbGradeRaw ?? null,
@@ -105,5 +102,8 @@ export function toContractTender(
     contactEmail: row.contactEmail ?? null,
     contactPhone: row.contactPhone ?? null,
     firstSeenAt: formatIsoDate(row.firstSeenAt),
+    procurementType: row.procurementType ?? null,
+    municipalityCode: row.municipalityCode ?? null,
+    municipalityName: row.municipalityName ?? null,
   };
 }
