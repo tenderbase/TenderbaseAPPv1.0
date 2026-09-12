@@ -1,5 +1,12 @@
 export type JsonRecord = Record<string, unknown>;
 
+export type TenderDocument = {
+  name: string | null;
+  url: string;
+  fileType: string | null;
+  isAddendum: boolean;
+};
+
 export type NormalizedTender = {
   source: string;
   sourceUrl: string;
@@ -20,6 +27,7 @@ export type NormalizedTender = {
   contactEmail?: string;
   contactPhone?: string;
   procurementType: string;
+  documents: TenderDocument[];
   raw: JsonRecord;
 };
 
