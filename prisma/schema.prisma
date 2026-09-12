@@ -1,6 +1,5 @@
 // TenderBase — SA public procurement tenders.
-// Schema mirrors the contract the live TenderBase app already consumes
-// (see RESEARCH.md section 2), so the API layer stays a thin pass-through.
+// Prisma schema for Neon PostgreSQL.
 
 generator client {
   provider        = "prisma-client-js"
@@ -9,19 +8,20 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-
-  // Pooled connection, used by the application at runtime.
-  // On Neon this is the hostname WITH the `-pooler` suffix.
-  url = env("DATABASE_URL")
-
-  // Direct (unpooled) connection, used by the Prisma CLI for migrations.
-  // Neon routes pooled connections through PgBouncer in transaction mode,
-  // which does not support the session-level state that DDL needs, so
-  // `prisma migrate deploy` must run against the direct endpoint
-  // (hostname WITHOUT `-pooler`).
-  //
-  // Locally both point at the same database, which is harmless.
+  url      = env("DATABASE_URL")
   directUrl = env("DIRECT_URL")
+}
+
+model Province {
+  id        String   @id @default(cuid())
+  code      String   @unique
+  name      String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organizations Organization[]
+
+  @@index([name])
 }
 
 model Municipality {
@@ -35,34 +35,53 @@ model Municipality {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  tenders Tender[]
+  tenders       Tender[]
+  organizations Organization[]
 
   @@index([province, enabled])
+}
+
+model Organization {
+  id            String   @id @default(cuid())
+  externalId    String?
+  name          String
+  organizationType String?
+  provinceId    String?
+  municipalityId String?
+  websiteUrl    String?
+  source        String   @default("OCDS")
+  rawData       Json?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  province     Province?     @relation(fields: [provinceId], references: [id], onDelete: SetNull)
+  municipality Municipality? @relation(fields: [municipalityId], references: [id], onDelete: SetNull)
+  buyerTenders Tender[]
+  awards       TenderAward[] @relation("AwardSupplier")
+
+  @@index([name])
+  @@index([externalId])
+  @@index([provinceId])
+  @@index([municipalityId])
+  @@unique([source, externalId], name: "organization_source_externalId")
 }
 
 model Tender {
   id String @id @default(cuid())
 
-  // --- provenance / identity -------------------------------------------
   source       String @default("OCDS")
   sourceUrl    String
   ocid         String
   releaseId    String
   tenderNumber String
 
-  // --- procurement classification -------------------------------------
-  /// Stable TenderBase classification: TENDER | RFQ | QUOTATION | EOI |
-  /// ADDENDUM | AWARD | CANCELLATION | NOTICE | OTHER.
-  /// Kept as String rather than a database enum so a new procurement class
-  /// can be introduced without blocking ingestion/migrations.
   procurementType String @default("TENDER")
 
-  // --- municipality identity ------------------------------------------
-  /// Null for national OCDS opportunities; populated for municipal sources.
   municipalityId String?
   municipality   Municipality? @relation(fields: [municipalityId], references: [id], onDelete: SetNull)
+  buyerOrganizationId String?
+  buyerOrganization   Organization? @relation(fields: [buyerOrganizationId], references: [id], onDelete: SetNull)
 
-  // --- app-facing fields (names match the live contract) ---------------
   title        String?
   description  String?
   organisation String?
@@ -79,18 +98,11 @@ model Tender {
   contactEmail String?
   contactPhone String?
 
-  // --- enrichment -------------------------------------------------------
-  /// Regex-extracted from free text; ~2.3% recall. Never a hard filter.
   cidbGrade    String?
   cidbGradeRaw String?
-  /// false for "Regret Letter" / cancellation notices (not opportunities)
-  isOpportunity Boolean  @default(true)
+  isOpportunity Boolean @default(true)
 
-  // --- change detection -------------------------------------------------
   contentHash String
-
-  /// Load-bearing for notifications: alerts only fire for tenders first
-  /// seen AFTER a filter set was created, so a backfill never emails anyone.
   firstSeenAt DateTime @default(now())
   lastSeenAt  DateTime @updatedAt
   createdAt   DateTime @default(now())
@@ -98,9 +110,14 @@ model Tender {
 
   documents     TenderDocument[]
   notifications Notification[]
+  awards        TenderAward[]
+  cancellations TenderCancellation[]
+  changes       TenderChange[]
+  rawReleases   RawTenderData[]
 
   @@unique([source, ocid, releaseId], name: "source_ocid_releaseId")
   @@index([municipalityId, procurementType])
+  @@index([buyerOrganizationId])
   @@index([province, category])
   @@index([closingDate])
   @@index([publishedDate])
@@ -122,117 +139,194 @@ model TenderDocument {
   @@index([tenderId])
 }
 
-model ScraperRun {
-  id          String  @id @default(cuid())
-  source      String  @default("OCDS")
-  status      String  @default("RUNNING") // RUNNING | SUCCESS | ERROR
-  isBackfill  Boolean @default(false)
+model TenderAward {
+  id             String   @id @default(cuid())
+  tenderId       String
+  supplierOrgId  String?
+  awardId        String?
+  status         String?
+  amountCents    BigInt?
+  currency       String?  @default("ZAR")
+  awardedAt      DateTime?
+  rawData        Json?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
-  dateFrom DateTime?
-  dateTo   DateTime?
+  tender      Tender       @relation(fields: [tenderId], references: [id], onDelete: Cascade)
+  supplierOrg Organization? @relation("AwardSupplier", fields: [supplierOrgId], references: [id], onDelete: SetNull)
 
+  @@unique([tenderId, awardId], name: "tender_award_identity")
+  @@index([supplierOrgId])
+  @@index([awardedAt])
+}
+
+model TenderCancellation {
+  id           String   @id @default(cuid())
+  tenderId     String
+  reason       String?
+  cancelledAt  DateTime?
+  rawData      Json?
+  createdAt    DateTime @default(now())
+
+  tender Tender @relation(fields: [tenderId], references: [id], onDelete: Cascade)
+
+  @@index([tenderId])
+  @@index([cancelledAt])
+}
+
+model TenderChange {
+  id          String   @id @default(cuid())
+  tenderId    String
+  releaseId   String
+  changeType  String
+  changedAt   DateTime @default(now())
+  contentHash String?
+  summary     String?
+  rawData     Json?
+
+  tender Tender @relation(fields: [tenderId], references: [id], onDelete: Cascade)
+
+  @@unique([tenderId, releaseId, changeType], name: "tender_change_identity")
+  @@index([tenderId, changedAt])
+}
+
+model RawTenderData {
+  id        String   @id @default(cuid())
+  source    String   @default("OCDS")
+  ocid      String
+  releaseId String
+  payload   Json
+  contentHash String
+  fetchedAt DateTime @default(now())
+  httpStatus Int?
+
+  tenderId String?
+  tender   Tender? @relation(fields: [tenderId], references: [id], onDelete: SetNull)
+
+  @@unique([source, ocid, releaseId], name: "raw_source_ocid_releaseId")
+  @@index([ocid])
+  @@index([fetchedAt])
+  @@index([tenderId])
+}
+
+model IngestionRun {
+  id          String   @id @default(cuid())
+  source      String   @default("OCDS")
+  status      String   @default("RUNNING")
+  isBackfill  Boolean  @default(false)
+  dateFrom    DateTime?
+  dateTo      DateTime?
+  cursor      String?
   pagesFetched   Int @default(0)
   fetchedCount   Int @default(0)
   insertedCount  Int @default(0)
   updatedCount   Int @default(0)
   unchangedCount Int @default(0)
   errorCount     Int @default(0)
+  startedAt   DateTime @default(now())
+  finishedAt  DateTime?
+  durationMs  Int?
+  lastReleaseAt DateTime?
+  errorMessage String?
 
-  startedAt  DateTime  @default(now())
+  errors IngestionError[]
+
+  @@index([source, status, startedAt])
+  @@index([lastReleaseAt])
+}
+
+model IngestionError {
+  id        String   @id @default(cuid())
+  runId     String
+  ocid      String?
+  releaseId String?
+  url       String?
+  message   String
+  details   Json?
+  createdAt DateTime @default(now())
+
+  run IngestionRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId])
+  @@index([createdAt])
+}
+
+// Legacy ingestion telemetry retained for compatibility with the current app.
+model ScraperRun {
+  id          String  @id @default(cuid())
+  source      String  @default("OCDS")
+  status      String  @default("RUNNING")
+  isBackfill  Boolean @default(false)
+  dateFrom DateTime?
+  dateTo   DateTime?
+  pagesFetched Int @default(0)
+  fetchedCount Int @default(0)
+  insertedCount Int @default(0)
+  updatedCount Int @default(0)
+  unchangedCount Int @default(0)
+  errorCount Int @default(0)
+  startedAt DateTime @default(now())
   finishedAt DateTime?
   durationMs Int?
-
   errors ScraperError[]
-
   @@index([startedAt])
 }
 
 model ScraperError {
-  id        String   @id @default(cuid())
-  runId     String?
-  run       ScraperRun? @relation(fields: [runId], references: [id], onDelete: Cascade)
-  url       String?
-  message   String
+  id String @id @default(cuid())
+  runId String?
+  run ScraperRun? @relation(fields: [runId], references: [id], onDelete: Cascade)
+  url String?
+  message String
   createdAt DateTime @default(now())
-
   @@index([runId])
 }
 
-// ---------------------------------------------------------------------------
-// Matching + notifications (Phase 4)
-// ---------------------------------------------------------------------------
-
-/// A saved search. Match rule = province (hard filter) AND (category OR keywords).
-/// The category/keyword union is deliberate: measured +28.6% recall over either
-/// alone, because neither the feed's categories nor keywords cover everything.
 model FilterSet {
-  id     String @id @default(cuid())
+  id String @id @default(cuid())
   userId String
-  name   String
-
-  provinces  String[] @default([])
+  name String
+  provinces String[] @default([])
   categories String[] @default([])
-  keywords   String[] @default([])
-
-  notifyNewMatch Boolean  @default(true)
-  notifyExpiring Boolean  @default(true)
-  expiryLeadDays Int      @default(7)
-  channels       String[] @default(["inapp"])
-  /// Destination for email alerts. Temporary: the app owns user identity, so
-  /// this will eventually come from the authenticated user record.
-  notifyEmail    String?
-
+  keywords String[] @default([])
+  notifyNewMatch Boolean @default(true)
+  notifyExpiring Boolean @default(true)
+  expiryLeadDays Int @default(7)
+  channels String[] @default(["inapp"])
+  notifyEmail String?
   isActive Boolean @default(true)
-
-  /// Doubles as the incremental cursor AND the backfill guard: a filter set
-  /// never matches tenders first seen before it existed, so importing 1,845
-  /// historical tenders can never email anyone.
-  createdAt     DateTime  @default(now())
+  createdAt DateTime @default(now())
   lastMatchedAt DateTime?
-
   notifications Notification[]
-
   @@index([userId])
   @@index([isActive])
 }
 
 model Notification {
   id String @id @default(cuid())
-
-  /// Explicit dedupe key rather than a nullable-column unique constraint:
-  /// Postgres treats NULLs as DISTINCT, so a unique index on a nullable
-  /// `closingDate` would let duplicate alerts through. See buildDedupeKey().
   dedupeKey String @unique
-
   filterSetId String
-  filterSet   FilterSet @relation(fields: [filterSetId], references: [id], onDelete: Cascade)
-  tenderId    String
-  tender      Tender    @relation(fields: [tenderId], references: [id], onDelete: Cascade)
-  userId      String
-
-  /// new_match | expiring
-  type        String
-  /// Set for `expiring` only — the deadline this alert refers to.
+  filterSet FilterSet @relation(fields: [filterSetId], references: [id], onDelete: Cascade)
+  tenderId String
+  tender Tender @relation(fields: [tenderId], references: [id], onDelete: Cascade)
+  userId String
+  type String
   closingDate DateTime?
-
   inappSentAt DateTime?
-  pushSentAt  DateTime?
+  pushSentAt DateTime?
   emailSentAt DateTime?
-
   createdAt DateTime @default(now())
-
   @@index([userId, createdAt])
   @@index([filterSetId])
 }
 
 model PushSubscription {
-  id        String   @id @default(cuid())
-  userId    String
-  endpoint  String   @unique
-  p256dh    String
-  auth      String
+  id String @id @default(cuid())
+  userId String
+  endpoint String @unique
+  p256dh String
+  auth String
   userAgent String?
   createdAt DateTime @default(now())
-
   @@index([userId])
 }
