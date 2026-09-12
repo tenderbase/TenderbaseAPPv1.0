@@ -49,7 +49,6 @@ export function buildServer() {
       displayOperationId: false,
       defaultModelsExpandDepth: 2,
       defaultModelExpandDepth: 2,
-      hideUntagged: false,
       tagsSorter: "alpha",
       operationsSorter: "alpha",
     },
