@@ -67,6 +67,8 @@ body:before{content:"TenderBase API";display:block;background:linear-gradient(13
 .swagger-ui .opblock-tag{margin:18px 0 0!important;border:1px solid #dce3ed!important;border-radius:15px!important;background:#fff!important;padding:16px 18px!important;box-shadow:0 6px 18px rgba(15,23,42,.04)}
 .swagger-ui .opblock-tag .nostyle{font-size:18px!important;font-weight:800!important;color:#172033!important}
 .swagger-ui .opblock-tag small{color:#718096!important}
+.swagger-ui .opblock-tag-section{display:block!important;margin:0!important;padding:0!important}
+.swagger-ui .opblock-tag-section .opblock{display:block!important;visibility:visible!important;opacity:1!important}
 .swagger-ui .opblock{margin:10px 0!important;border-radius:14px!important;border:1px solid #dce3ed!important;box-shadow:0 5px 16px rgba(15,23,42,.04)!important;overflow:hidden}
 .swagger-ui .opblock .opblock-summary{padding:13px 15px!important}
 .swagger-ui .opblock .opblock-summary-description{font-weight:600!important;color:#46556c!important}
@@ -90,7 +92,7 @@ export function buildServer() {
   app.register(fastifySwagger, { openapi: { openapi: "3.0.3", info: { title: "TenderBase API", description: "South African public procurement intelligence API. Search live tender data, inspect municipal coverage, run ingestion controls and manage tender records.", version: "1.6.0" }, servers: [{ url: "/", description: "Live TenderBase API" }], tags: [{ name: "public", description: "Search, statistics, metadata and tender records" }, { name: "admin", description: "Protected ingestion, municipality controls and manual tender management" }], components: { securitySchemes: { AdminApiKey: { type: "apiKey", in: "header", name: "x-admin-key", description: "Admin key for protected dataset controls." }, PublicApiKey: { type: "apiKey", in: "header", name: "x-api-key", description: "Public API key, when configured." } } } } });
   app.register(fastifySwaggerUi, {
     routePrefix: "/docs",
-    uiConfig: { docExpansion: "full", deepLinking: true, filter: true, displayRequestDuration: true, tryItOutEnabled: true, persistAuthorization: true, displayOperationId: false, defaultModelsExpandDepth: 2, defaultModelExpandDepth: 2, tagsSorter: "alpha", operationsSorter: "alpha" },
+    uiConfig: { url: "/docs/json", docExpansion: "full", deepLinking: true, filter: true, displayRequestDuration: true, tryItOutEnabled: true, persistAuthorization: true, displayOperationId: false, defaultModelsExpandDepth: 2, defaultModelExpandDepth: 2, tagsSorter: "alpha", operationsSorter: "alpha" },
     theme: { title: "TenderBase API Reference", css: [{ filename: "tenderbase-api.css", content: tenderBaseCss }] },
   });
 
