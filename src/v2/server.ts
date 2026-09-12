@@ -34,6 +34,8 @@ export async function buildServer() {
   });
   await app.register(swaggerUi, { routePrefix: "/docs" });
 
+  app.get("/", async () => ({ service: "TenderBase API V2", status: "ok", docs: "/docs", health: "/health", tenders: "/tenders" }));
+
   app.get("/health", async (_request, reply) => {
     try {
       await pool.query("SELECT 1");
