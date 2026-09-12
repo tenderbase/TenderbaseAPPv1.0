@@ -93,11 +93,56 @@ export async function relinkMunicipality(code: string, source: string) {
 }
 
 export async function getAdminDashboard() {
-  const [sources, municipalities, types, recentRuns] = await Promise.all([
+  const [
+    sources,
+    municipalities,
+    types,
+    recentRuns,
+    dataset,
+    unlinkedBySource,
+  ] = await Promise.all([
     pool.query('SELECT source, COUNT(*)::int AS count FROM "Tender" GROUP BY source ORDER BY count DESC, source ASC'),
-    pool.query('SELECT m.code, m.name, m.enabled, COUNT(t.id)::int AS "tenderCount" FROM "Municipality" m LEFT JOIN "Tender" t ON t."municipalityId" = m.id GROUP BY m.id ORDER BY m.name'),
+    pool.query('SELECT m.code, m.name, m.province, m.type, m.enabled, COUNT(t.id)::int AS "tenderCount" FROM "Municipality" m LEFT JOIN "Tender" t ON t."municipalityId" = m.id AND t."isOpportunity" = true GROUP BY m.id ORDER BY m.name'),
     pool.query('SELECT "procurementType", COUNT(*)::int AS count FROM "Tender" GROUP BY "procurementType" ORDER BY count DESC, "procurementType"'),
-    pool.query('SELECT id, source, status, "isBackfill", "fetchedCount", "insertedCount", "updatedCount", "unchangedCount", "errorCount", "startedAt", "finishedAt", "durationMs" FROM "ScraperRun" ORDER BY "startedAt" DESC LIMIT 20'),
+    pool.query('SELECT id, source, status, "isBackfill", "pagesFetched", "fetchedCount", "insertedCount", "updatedCount", "unchangedCount", "errorCount", "startedAt", "finishedAt", "durationMs" FROM "ScraperRun" ORDER BY "startedAt" DESC LIMIT 20'),
+    pool.query(`SELECT
+      COUNT(*)::int AS "totalTenders",
+      COUNT(*) FILTER (WHERE "isOpportunity" = true)::int AS "opportunities",
+      COUNT(*) FILTER (WHERE "municipalityId" IS NOT NULL)::int AS "municipalTenders",
+      COUNT(*) FILTER (WHERE "municipalityId" IS NULL)::int AS "unassignedTenders",
+      MAX("lastSeenAt") AS "lastSeenAt",
+      MAX("publishedDate") AS "latestPublishedDate"
+      FROM "Tender"`),
+    pool.query(`SELECT source, COUNT(*)::int AS count
+      FROM "Tender"
+      WHERE "municipalityId" IS NULL
+      GROUP BY source
+      ORDER BY count DESC, source ASC`),
   ]);
-  return { sources: sources.rows, municipalities: municipalities.rows, procurementTypes: types.rows, recentRuns: recentRuns.rows };
+
+  const latestRun = recentRuns.rows[0] ?? null;
+  const runErrors = recentRuns.rows.reduce((sum, run) => sum + Number(run.errorCount ?? 0), 0);
+  const enabledMunicipalities = municipalities.rows.filter((m) => m.enabled).length;
+
+  return {
+    dataset: {
+      ...(dataset.rows[0] ?? {
+        totalTenders: 0,
+        opportunities: 0,
+        municipalTenders: 0,
+        unassignedTenders: 0,
+        lastSeenAt: null,
+        latestPublishedDate: null,
+      }),
+      enabledMunicipalities,
+      recentRunErrors: runErrors,
+      latestRunId: latestRun?.id ?? null,
+      latestRunStatus: latestRun?.status ?? null,
+    },
+    sources: sources.rows,
+    municipalities: municipalities.rows,
+    procurementTypes: types.rows,
+    unlinkedBySource: unlinkedBySource.rows,
+    recentRuns: recentRuns.rows,
+  };
 }
