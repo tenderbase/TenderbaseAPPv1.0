@@ -32,6 +32,7 @@ async function main() {
   console.log("=".repeat(64));
 
   let national = null as null | Awaited<ReturnType<typeof runIngest>>;
+  let nationalError: unknown = null;
   let municipal = null as null | Awaited<ReturnType<typeof runEThekwiniIngest>>;
 
   if (matchOnly) {
@@ -39,8 +40,13 @@ async function main() {
     console.log("[2/4] municipality ingest SKIPPED (--match-only)");
   } else {
     console.log(`[1/4] national ingest — rolling ${days}-day window`);
-    national = await runIngest({ live: true, days });
-    console.log(`      fetched ${national.fetched} | inserted ${national.inserted} | updated ${national.updated} | unchanged ${national.unchanged} | errors ${national.errors}`);
+    try {
+      national = await runIngest({ live: true, days });
+      console.log(`      fetched ${national.fetched} | inserted ${national.inserted} | updated ${national.updated} | unchanged ${national.unchanged} | errors ${national.errors}`);
+    } catch (e) {
+      nationalError = e;
+      console.error("WARNING: national ingest unavailable — continuing with municipal pipeline:", e);
+    }
 
     console.log("[2/4] municipality ingest — eThekwini open tenders");
     municipal = await runEThekwiniIngest();
@@ -61,6 +67,7 @@ async function main() {
   const total = await prisma.tender.count();
   console.log(`\nDone in ${((Date.now() - startedAt) / 1000).toFixed(1)}s — ${total} tenders in DB`);
 
+  if (nationalError) console.warn("National Treasury ingest failed, but municipal ingest, matching, and notification stages completed.");
   if (national && national.fetched === 0) throw new Error("national ingest fetched 0 releases — upstream source looks broken");
   if (municipal && municipal.fetched === 0) throw new Error("eThekwini ingest fetched 0 tenders — municipal source looks broken");
 }
