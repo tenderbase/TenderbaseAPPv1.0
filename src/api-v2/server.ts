@@ -6,6 +6,17 @@ import { runOcdsIngestion } from "./ingestion/run.js";
 
 const { Pool } = pg;
 
+function isAllowedOcdsUrl(candidate: URL): boolean {
+  const configured = process.env.OCDS_API_URL;
+  if (!configured) return false;
+  try {
+    const allowed = new URL(configured);
+    return candidate.protocol === allowed.protocol && candidate.hostname === allowed.hostname && candidate.port === allowed.port;
+  } catch {
+    return false;
+  }
+}
+
 export function buildV2Server() {
   const app = Fastify({ logger: true });
   const pool = process.env.DATABASE_URL ? new Pool({ connectionString: process.env.DATABASE_URL, max: 5 }) : null;
@@ -43,12 +54,14 @@ export function buildV2Server() {
     if (typeof suppliedKey !== "string" || suppliedKey !== expectedKey) return reply.code(401).send({ error: "Unauthorized" });
 
     const body = (request.body ?? {}) as { url?: unknown; maxPages?: unknown };
-    const url = typeof body.url === "string" && body.url.trim() ? body.url.trim() : process.env.OCDS_API_URL;
-    if (!url) return reply.code(400).send({ error: "OCDS API URL is required" });
+    const configuredUrl = process.env.OCDS_API_URL;
+    if (!configuredUrl) return reply.code(503).send({ error: "OCDS API URL is not configured" });
+    const requestedUrl = typeof body.url === "string" && body.url.trim() ? body.url.trim() : configuredUrl;
 
     let parsed: URL;
-    try { parsed = new URL(url); } catch { return reply.code(400).send({ error: "Invalid OCDS API URL" }); }
+    try { parsed = new URL(requestedUrl); } catch { return reply.code(400).send({ error: "Invalid OCDS URL" }); }
     if (!["http:", "https:"].includes(parsed.protocol)) return reply.code(400).send({ error: "OCDS URL must use HTTP or HTTPS" });
+    if (!isAllowedOcdsUrl(parsed)) return reply.code(400).send({ error: "OCDS URL host is not allowed" });
 
     const maxPages = Math.min(1000, Math.max(1, Number(body.maxPages ?? process.env.OCDS_MAX_PAGES ?? 100) || 100));
     const summary = await runOcdsIngestion(pool, parsed.toString(), maxPages);
@@ -74,7 +87,15 @@ export function buildV2Server() {
 
   app.get("/organizations", async (_request, reply) => {
     if (!pool) return reply.code(503).send({ error: "Database is not configured" });
-    return { data: (await pool.query("select * from \"Organization\" order by name asc limit 100")).rows };
+    const result = await pool.query(`
+      select organisation as name, count(*)::int as "tenderCount"
+      from "Tender"
+      where organisation is not null and trim(organisation) <> ''
+      group by organisation
+      order by organisation asc
+      limit 100
+    `);
+    return { data: result.rows };
   });
 
   app.get("/municipalities", async (_request, reply) => {
