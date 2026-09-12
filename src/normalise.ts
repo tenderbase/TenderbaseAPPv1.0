@@ -187,7 +187,7 @@ export function normaliseRelease(release: OcdsRelease): NormalisedTender {
     contentHash: createHash("sha256")
       .update(
         JSON.stringify({
-          title: base.description,
+          title,
           d: base.description,
           s: base.status,
           c: base.category,
