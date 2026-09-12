@@ -130,6 +130,9 @@ export function buildServer() {
   if (apiKey) {
     app.addHook("onRequest", async (req, reply) => {
       const url = req.url;
+      // Admin routes have their own credential boundary so ADMIN_API_KEY can
+      // be different from the public API key.
+      if (url.startsWith("/admin")) return;
       if (url === "/" || url.startsWith("/health") || url.startsWith("/docs")) return;
       const provided =
         (req.headers["x-api-key"] as string | undefined) ??
