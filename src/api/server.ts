@@ -17,7 +17,7 @@ import {
 } from "./tenders.js";
 import { toContractTender } from "./serialise.js";
 import { getAdminDashboard, manualUpsertTender, relinkMunicipality } from "./admin.js";
-import type { ProcurementType, TenderDocument } from "../normalise.js";
+import type { ManualTenderInput } from "./admin.js";
 
 const ProcurementTypeSchema = z.enum([
   "TENDER",
@@ -51,7 +51,7 @@ const QuerySchema = z.object({
   cidbGrade: z.string().trim().min(1).optional(),
   organisation: z.string().trim().min(1).optional(),
   constructionOnly: z
-    .union([z.boolean(), z.enum(["true", "false"]))])
+    .union([z.boolean(), z.enum(["true", "false"])])
     .optional()
     .transform((v) => v === true || v === "true"),
   sort: z.enum(["latest", "closing", "closing_desc", "published_asc"]).default("latest"),
@@ -257,7 +257,7 @@ export function buildServer() {
   });
 
   app.get("/admin/dashboard", { preHandler: requireAdmin, schema: { tags: ["admin"] } }, async () => {
-    return { ...await getAdminDashboard(), source: "live" };
+    return { ...(await getAdminDashboard()), source: "live" };
   });
 
   app.get("/admin/municipalities", { preHandler: requireAdmin, schema: { tags: ["admin"] } }, async () => {
@@ -270,32 +270,7 @@ export function buildServer() {
       return reply.code(400).send({ error: "Invalid tender payload", issues: parsed.error.issues });
     }
     try {
-      const result = await manualUpsertTender(parsed.data as {
-        source: string;
-        sourceUrl: string;
-        ocid: string;
-        releaseId: string;
-        tenderNumber: string;
-        procurementType: ProcurementType;
-        municipalityCode?: string | null;
-        title?: string | null;
-        description?: string | null;
-        organisation?: string | null;
-        category?: string | null;
-        province?: string | null;
-        location?: string | null;
-        valueCents?: number | null;
-        publishedDate?: string | null;
-        closingDate?: string | null;
-        status?: string | null;
-        contactName?: string | null;
-        contactEmail?: string | null;
-        contactPhone?: string | null;
-        cidbGrade?: string | null;
-        cidbGradeRaw?: string | null;
-        documents: TenderDocument[];
-        isOpportunity: boolean;
-      });
+      const result = await manualUpsertTender(parsed.data as ManualTenderInput);
       return reply.code(result.outcome === "inserted" ? 201 : 200).send({ ...result, source: "live" });
     } catch (err) {
       console.error("Manual tender ingestion failed:", err);
