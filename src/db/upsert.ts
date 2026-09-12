@@ -70,6 +70,12 @@ export async function upsertTender(t: NormalisedTender): Promise<UpsertOutcome> 
     let tenderId: string;
     if (existing.rows[0]) {
       tenderId = existing.rows[0].id;
+      const updateValues = [
+        values[1], values[4], values[5], values[6], values[7], values[8],
+        values[9], values[10], values[11], values[12], values[13], values[14],
+        values[15], values[16], values[17], values[18], values[19], values[20],
+        values[21], values[22], values[23], tenderId,
+      ];
       await client.query(
         `UPDATE "Tender" SET
           "sourceUrl" = $1, "tenderNumber" = $2, "procurementType" = $3,
@@ -81,7 +87,7 @@ export async function upsertTender(t: NormalisedTender): Promise<UpsertOutcome> 
           "isOpportunity" = $20, "contentHash" = $21,
           "lastSeenAt" = NOW(), "updatedAt" = NOW()
          WHERE id = $22`,
-        [...values.slice(1), tenderId],
+        updateValues,
       );
     } else {
       const result = await client.query<{ id: string }>(
