@@ -32,15 +32,6 @@ const manualTenderOpenApi = {
   } }
 };
 
-const swaggerUiExpandAll = function () {
-  const expand = () => {
-    document.querySelectorAll('.opblock-tag[aria-expanded="false"]').forEach((tag) => (tag as HTMLElement).click());
-  };
-  expand();
-  window.setTimeout(expand, 100);
-  window.setTimeout(expand, 500);
-};
-
 export function buildServer() {
   const app = Fastify({ logger: false });
   app.register(helmet, { contentSecurityPolicy: false });
@@ -61,7 +52,6 @@ export function buildServer() {
       hideUntagged: false,
       tagsSorter: "alpha",
       operationsSorter: "alpha",
-      onComplete: swaggerUiExpandAll,
     },
     theme: {
       js: [{
