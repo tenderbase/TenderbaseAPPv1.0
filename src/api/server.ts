@@ -40,7 +40,7 @@ export function buildServer() {
   app.register(fastifySwaggerUi, {
     routePrefix: "/docs",
     uiConfig: {
-      docExpansion: "full",
+      docExpansion: "list",
       deepLinking: true,
       filter: true,
       displayRequestDuration: true,
@@ -51,26 +51,6 @@ export function buildServer() {
       defaultModelExpandDepth: 2,
       tagsSorter: "alpha",
       operationsSorter: "alpha",
-    },
-    theme: {
-      js: [{
-        filename: "tenderbase-swagger.js",
-        content: `(() => {
-          const expandTags = () => {
-            document.querySelectorAll('.opblock-tag button[aria-expanded="false"], .opblock-tag[aria-expanded="false"] button').forEach((button) => button.click());
-          };
-          const start = () => {
-            expandTags();
-            setTimeout(expandTags, 100);
-            setTimeout(expandTags, 500);
-            setTimeout(expandTags, 1500);
-          };
-          if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
-          else start();
-          const observer = new MutationObserver(expandTags);
-          observer.observe(document.documentElement, { childList: true, subtree: true });
-        })();`,
-      }],
     },
   });
 
