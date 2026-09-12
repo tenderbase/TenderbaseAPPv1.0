@@ -2,6 +2,17 @@ import { createHash } from "node:crypto";
 import { SOURCE_URL } from "./config.js";
 import type { OcdsRelease } from "./sources/ocds.js";
 
+export type ProcurementType =
+  | "TENDER"
+  | "RFQ"
+  | "QUOTATION"
+  | "EOI"
+  | "ADDENDUM"
+  | "AWARD"
+  | "CANCELLATION"
+  | "NOTICE"
+  | "OTHER";
+
 export interface TenderDocument {
   name: string | null;
   url: string;
@@ -15,6 +26,8 @@ export interface NormalisedTender {
   ocid: string;
   releaseId: string;
   tenderNumber: string;
+  procurementType: ProcurementType;
+  municipalityCode: string | null;
   title: string | null;
   description: string | null;
   organisation: string | null;
@@ -100,11 +113,22 @@ export function extractCidbGrade(
 
 /**
  * Entries that are NOT bid opportunities. "Regret Letter" posts are notices to
- * unsuccessful bidders (12 found in a 31-day sample, 9 of them status=active);
- * showing one as a new tender would confuse users.
+ * unsuccessful bidders; showing one as a new tender would confuse users.
  */
 const NOISE_RE =
   /regret\s*letter|unsuccessful\s+(?:suppliers?|bidders?)|cancellation\s+of\s+(?:a\s+)?tender/i;
+
+/** Classify the national OCDS release conservatively. */
+export function classifyProcurementType(title: string | null, description: string | null): ProcurementType {
+  const text = `${title ?? ""} ${description ?? ""}`.toLowerCase();
+  if (/\baddendum\b|\bamendment\b|\bclarification\b|\bq\s*&\s*a\b/.test(text)) return "ADDENDUM";
+  if (/\brequest\s+for\s+quotation\b|\brfq\b|\bquotation\b/.test(text)) return "RFQ";
+  if (/\bexpression\s+of\s+interest\b|\beoi\b/.test(text)) return "EOI";
+  if (/\baward\b|\bsuccessful\s+(?:bidder|tenderer|supplier)/.test(text)) return "AWARD";
+  if (/\bcancellation\b|\bcancelled\b|\bcanceled\b/.test(text)) return "CANCELLATION";
+  if (/\bnotice\b/.test(text) && !/\btender\b/.test(text)) return "NOTICE";
+  return "TENDER";
+}
 
 // ---------------------------------------------------------------- main
 
@@ -117,9 +141,7 @@ export function normaliseRelease(release: OcdsRelease): NormalisedTender {
   const description = cleanText(t.description);
   const specialConditions = cleanText(t.specialConditions);
 
-  const organisation =
-    cleanText(buyer.name) ?? cleanText(procuring.name) ?? null;
-
+  const organisation = cleanText(buyer.name) ?? cleanText(procuring.name) ?? null;
   const period = t.tenderPeriod ?? {};
   const contact = t.contactPerson ?? {};
 
@@ -146,9 +168,9 @@ export function normaliseRelease(release: OcdsRelease): NormalisedTender {
     .filter((d: TenderDocument | null): d is TenderDocument => d !== null);
 
   const cidb = extractCidbGrade(description, specialConditions, title);
-
   const haystack = [title, description, specialConditions].filter(Boolean).join(" ");
   const isOpportunity = !NOISE_RE.test(haystack);
+  const procurementType = classifyProcurementType(title, description);
 
   const base = {
     status: cleanText(t.status),
@@ -165,6 +187,8 @@ export function normaliseRelease(release: OcdsRelease): NormalisedTender {
     ocid: String(release.ocid ?? ""),
     releaseId: String(release.id ?? ""),
     tenderNumber: String(t.id ?? ""),
+    procurementType,
+    municipalityCode: null,
     title,
     description,
     organisation,
@@ -182,20 +206,18 @@ export function normaliseRelease(release: OcdsRelease): NormalisedTender {
     cidbGradeRaw: cidb.raw,
     documents,
     isOpportunity,
-    // Only fields that can meaningfully change drive the hash — a republished
-    // release with identical content must not count as an update.
     contentHash: createHash("sha256")
-      .update(
-        JSON.stringify({
-          title,
-          d: base.description,
-          s: base.status,
-          c: base.category,
-          p: base.province,
-          cd: base.closingDate,
-          docs: base.documents,
-        })
-      )
+      .update(JSON.stringify({
+        title,
+        d: base.description,
+        s: base.status,
+        pt: procurementType,
+        m: null,
+        c: base.category,
+        p: base.province,
+        cd: base.closingDate,
+        docs: base.documents,
+      }))
       .digest("hex"),
   };
 }
