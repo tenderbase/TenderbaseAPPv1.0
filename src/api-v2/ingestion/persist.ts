@@ -1,7 +1,6 @@
+import { randomUUID, createHash } from "node:crypto";
 import pg from "pg";
 import type { NormalizedTender } from "./types.js";
-
-const { Pool } = pg;
 
 export type PersistStats = {
   inserted: number;
@@ -10,13 +9,15 @@ export type PersistStats = {
 };
 
 export async function persistTender(pool: pg.Pool, tender: NormalizedTender): Promise<"inserted" | "updated" | "unchanged"> {
-  const hash = tender.raw ? JSON.stringify(tender.raw) : "{}";
+  const contentHash = createHash("sha256")
+    .update(JSON.stringify(tender.raw))
+    .digest("hex");
+
   const existing = await pool.query<{ id: string; contentHash: string }>(
     'select id, "contentHash" from "Tender" where source = $1 and ocid = $2 and "releaseId" = $3 limit 1',
     [tender.source, tender.ocid, tender.releaseId],
   );
 
-  const contentHash = await sha256(hash);
   if (existing.rowCount && existing.rows[0].contentHash === contentHash) {
     await pool.query('update "Tender" set "lastSeenAt" = now() where id = $1', [existing.rows[0].id]);
     return "unchanged";
@@ -50,24 +51,19 @@ export async function persistTender(pool: pg.Pool, tender: NormalizedTender): Pr
       "publishedDate", "closingDate", status, "contactName", "contactEmail", "contactPhone",
       "contentHash", "firstSeenAt", "lastSeenAt", "createdAt", "updatedAt", "isOpportunity"
     ) values (
-      gen_random_uuid()::text, $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,now(),now(),now(),now(),true
+      $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,now(),now(),now(),now(),true
     )`,
     [
-      tender.source, tender.sourceUrl, tender.ocid, tender.releaseId, tender.tenderNumber,
-      tender.procurementType, tender.title ?? null, tender.description ?? null,
-      tender.organisation ?? null, tender.category ?? null, tender.province ?? null,
-      tender.location ?? null, tender.valueCents?.toString() ?? null, tender.publishedDate ?? null,
-      tender.closingDate ?? null, tender.status ?? null, tender.contactName ?? null,
-      tender.contactEmail ?? null, tender.contactPhone ?? null, contentHash,
+      randomUUID(), tender.source, tender.sourceUrl, tender.ocid, tender.releaseId,
+      tender.tenderNumber, tender.procurementType, tender.title ?? null,
+      tender.description ?? null, tender.organisation ?? null, tender.category ?? null,
+      tender.province ?? null, tender.location ?? null, tender.valueCents?.toString() ?? null,
+      tender.publishedDate ?? null, tender.closingDate ?? null, tender.status ?? null,
+      tender.contactName ?? null, tender.contactEmail ?? null, tender.contactPhone ?? null,
+      contentHash,
     ],
   );
   return "inserted";
-}
-
-async function sha256(value: string): Promise<string> {
-  const bytes = new TextEncoder().encode(value);
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
-  return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 export async function persistBatch(pool: pg.Pool, tenders: NormalizedTender[]): Promise<PersistStats> {
