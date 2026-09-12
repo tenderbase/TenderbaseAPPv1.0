@@ -55,7 +55,21 @@ export function buildServer() {
     theme: {
       js: [{
         filename: "tenderbase-swagger.js",
-        content: `(() => { const expand = () => document.querySelectorAll('.opblock-tag[aria-expanded="false"]').forEach((tag) => tag.click()); window.addEventListener('load', expand); setTimeout(expand, 100); setTimeout(expand, 500); })();`,
+        content: `(() => {
+          const expandTags = () => {
+            document.querySelectorAll('.opblock-tag button[aria-expanded="false"], .opblock-tag[aria-expanded="false"] button').forEach((button) => button.click());
+          };
+          const start = () => {
+            expandTags();
+            setTimeout(expandTags, 100);
+            setTimeout(expandTags, 500);
+            setTimeout(expandTags, 1500);
+          };
+          if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
+          else start();
+          const observer = new MutationObserver(expandTags);
+          observer.observe(document.documentElement, { childList: true, subtree: true });
+        })();`,
       }],
     },
   });
