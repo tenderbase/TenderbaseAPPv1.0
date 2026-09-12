@@ -1,4 +1,4 @@
-import { prisma } from "./prisma.js";
+import { pool, prisma } from "./prisma.js";
 import type { NormalisedTender } from "../normalise.js";
 
 export type UpsertOutcome = "inserted" | "updated" | "unchanged";
@@ -21,12 +21,14 @@ export async function upsertTender(t: NormalisedTender): Promise<UpsertOutcome> 
     select: { id: true, contentHash: true },
   });
 
-  const municipality = t.municipalityCode
-    ? await prisma.municipality.findUnique({
-        where: { code: t.municipalityCode },
-        select: { id: true },
-      })
-    : null;
+  let municipality: { id: string } | null = null;
+  if (t.municipalityCode) {
+    const result = await pool.query<{ id: string }>(
+      'SELECT id FROM "Municipality" WHERE code = $1 LIMIT 1',
+      [t.municipalityCode],
+    );
+    municipality = result.rows[0] ?? null;
+  }
 
   if (t.municipalityCode && !municipality) {
     throw new Error(`Unknown municipality code: ${t.municipalityCode}`);
