@@ -24,6 +24,22 @@ datasource db {
   directUrl = env("DIRECT_URL")
 }
 
+model Municipality {
+  id          String  @id @default(cuid())
+  code        String  @unique
+  name        String
+  province    String
+  type        String  @default("LOCAL_MUNICIPALITY")
+  websiteUrl  String?
+  enabled     Boolean @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenders Tender[]
+
+  @@index([province, enabled])
+}
+
 model Tender {
   id String @id @default(cuid())
 
@@ -33,6 +49,18 @@ model Tender {
   ocid         String
   releaseId    String
   tenderNumber String
+
+  // --- procurement classification -------------------------------------
+  /// Stable TenderBase classification: TENDER | RFQ | QUOTATION | EOI |
+  /// ADDENDUM | AWARD | CANCELLATION | NOTICE | OTHER.
+  /// Kept as String rather than a database enum so a new procurement class
+  /// can be introduced without blocking ingestion/migrations.
+  procurementType String @default("TENDER")
+
+  // --- municipality identity ------------------------------------------
+  /// Null for national OCDS opportunities; populated for municipal sources.
+  municipalityId String?
+  municipality   Municipality? @relation(fields: [municipalityId], references: [id], onDelete: SetNull)
 
   // --- app-facing fields (names match the live contract) ---------------
   title        String?
@@ -72,6 +100,7 @@ model Tender {
   notifications Notification[]
 
   @@unique([source, ocid, releaseId], name: "source_ocid_releaseId")
+  @@index([municipalityId, procurementType])
   @@index([province, category])
   @@index([closingDate])
   @@index([publishedDate])
