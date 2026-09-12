@@ -27,12 +27,21 @@ jobs:
 
       - name: Validate Prisma schema
         run: npx prisma validate
+        env:
+          DATABASE_URL: postgresql://localhost:5432/tenderbase_validation
+          DIRECT_URL: postgresql://localhost:5432/tenderbase_validation
 
       - name: Generate Prisma client
         run: npx prisma generate
+        env:
+          DATABASE_URL: postgresql://localhost:5432/tenderbase_validation
+          DIRECT_URL: postgresql://localhost:5432/tenderbase_validation
 
       - name: Build application
         run: npm run build
+        env:
+          DATABASE_URL: postgresql://localhost:5432/tenderbase_validation
+          DIRECT_URL: postgresql://localhost:5432/tenderbase_validation
 
       - name: Apply Sprint 1 migration to Neon
         run: npx prisma migrate deploy
