@@ -10,9 +10,9 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  ethekwini:
+  municipalities:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -27,9 +27,9 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           DIRECT_URL: ${{ secrets.DIRECT_URL }}
-      - name: Parse fixture
+      - name: Parse eThekwini fixture
         run: npm run test:ethekwini
-      - name: Ingest eThekwini
+      - name: Ingest all registered municipalities
         run: npm run ingest:municipality:prod
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
