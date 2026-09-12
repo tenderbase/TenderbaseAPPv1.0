@@ -51,25 +51,25 @@ export interface RawTender {
 }
 
 function buildWhere(p: ListParams): Prisma.Sql {
-  const conds: Prisma.Sql[] = [Prisma.sql`"isOpportunity" = true`];
-  if (p.source) conds.push(Prisma.sql`"source" = ${p.source}`);
-  if (p.province) conds.push(Prisma.sql`"province" = ${p.province}`);
-  if (p.category) conds.push(Prisma.sql`"category" = ${p.category}`);
-  if (p.status) conds.push(Prisma.sql`"status" = ${p.status}`);
-  if (p.municipalityCode) conds.push(Prisma.sql`"municipality"."code" = ${p.municipalityCode.toUpperCase()}`);
+  const conds: Prisma.Sql[] = [Prisma.sql`t."isOpportunity" = true`];
+  if (p.source) conds.push(Prisma.sql`t."source" = ${p.source}`);
+  if (p.province) conds.push(Prisma.sql`t."province" = ${p.province}`);
+  if (p.category) conds.push(Prisma.sql`t."category" = ${p.category}`);
+  if (p.status) conds.push(Prisma.sql`t."status" = ${p.status}`);
+  if (p.municipalityCode) conds.push(Prisma.sql`m."code" = ${p.municipalityCode.toUpperCase()}`);
   else if (p.municipality) {
     const municipality = p.municipality.trim();
-    conds.push(Prisma.sql`("municipality"."code" = ${municipality.toUpperCase()} OR "municipality"."name" ILIKE ${"%" + municipality + "%"})`);
+    conds.push(Prisma.sql`(m."code" = ${municipality.toUpperCase()} OR m."name" ILIKE ${"%" + municipality + "%"})`);
   }
-  if (p.procurementType) conds.push(Prisma.sql`"procurementType" = ${p.procurementType.toUpperCase()}`);
+  if (p.procurementType) conds.push(Prisma.sql`t."procurementType" = ${p.procurementType.toUpperCase()}`);
   if (p.q) conds.push(Prisma.sql`${SEARCH_EXPR} @@ websearch_to_tsquery('english', ${p.q})`);
-  if (p.closingBefore) conds.push(Prisma.sql`"closingDate" <= ${p.closingBefore}`);
-  if (p.closingAfter) conds.push(Prisma.sql`"closingDate" >= ${p.closingAfter}`);
-  if (p.publishedAfter) conds.push(Prisma.sql`"publishedDate" >= ${p.publishedAfter}`);
-  if (p.publishedBefore) conds.push(Prisma.sql`"publishedDate" <= ${p.publishedBefore}`);
-  if (p.cidbGrade) conds.push(Prisma.sql`"cidbGrade" = ${p.cidbGrade}`);
-  if (p.organisation) conds.push(Prisma.sql`"organisation" ILIKE ${"%" + p.organisation + "%"}`);
-  if (p.constructionOnly) conds.push(Prisma.sql`"category" = ANY(${CONSTRUCTION_CATEGORIES}::text[])`);
+  if (p.closingBefore) conds.push(Prisma.sql`t."closingDate" <= ${p.closingBefore}`);
+  if (p.closingAfter) conds.push(Prisma.sql`t."closingDate" >= ${p.closingAfter}`);
+  if (p.publishedAfter) conds.push(Prisma.sql`t."publishedDate" >= ${p.publishedAfter}`);
+  if (p.publishedBefore) conds.push(Prisma.sql`t."publishedDate" <= ${p.publishedBefore}`);
+  if (p.cidbGrade) conds.push(Prisma.sql`t."cidbGrade" = ${p.cidbGrade}`);
+  if (p.organisation) conds.push(Prisma.sql`t."organisation" ILIKE ${"%" + p.organisation + "%"}`);
+  if (p.constructionOnly) conds.push(Prisma.sql`t."category" = ANY(${CONSTRUCTION_CATEGORIES}::text[])`);
   return Prisma.sql`WHERE ${Prisma.join(conds, " AND ")}`;
 }
 
@@ -84,39 +84,34 @@ const TENDER_SELECT = Prisma.sql`
 `;
 
 export async function listTenders(p: ListParams) {
-  try {
-    const where = buildWhere(p);
-    const offset = (p.page - 1) * p.limit;
-    let order = Prisma.sql`ORDER BY t."publishedDate" DESC NULLS LAST, t."firstSeenAt" DESC`;
-    if (p.sort === "closing") order = Prisma.sql`ORDER BY t."closingDate" ASC NULLS LAST`;
-    else if (p.sort === "closing_desc") order = Prisma.sql`ORDER BY t."closingDate" DESC NULLS LAST`;
-    else if (p.sort === "published_asc") order = Prisma.sql`ORDER BY t."publishedDate" ASC NULLS LAST`;
+  const where = buildWhere(p);
+  const offset = (p.page - 1) * p.limit;
+  let order = Prisma.sql`ORDER BY t."publishedDate" DESC NULLS LAST, t."firstSeenAt" DESC`;
+  if (p.sort === "closing") order = Prisma.sql`ORDER BY t."closingDate" ASC NULLS LAST`;
+  else if (p.sort === "closing_desc") order = Prisma.sql`ORDER BY t."closingDate" DESC NULLS LAST`;
+  else if (p.sort === "published_asc") order = Prisma.sql`ORDER BY t."publishedDate" ASC NULLS LAST`;
 
-    const rows = await prisma.$queryRaw<RawTender[]>`
-      ${TENDER_SELECT} ${where} ${order}
-      LIMIT ${p.limit} OFFSET ${offset}
-    `;
+  const rows = await prisma.$queryRaw<RawTender[]>`
+    ${TENDER_SELECT} ${where} ${order}
+    LIMIT ${p.limit} OFFSET ${offset}
+  `;
 
-    const countRes = await prisma.$queryRaw<Array<{ count: number }>>`
-      SELECT count(*)::int AS count
-      FROM "Tender" t
-      LEFT JOIN "Municipality" m ON m.id = t."municipalityId"
-      ${where}
-    `;
-    const total = countRes[0]?.count ?? 0;
-    const ids = rows.map((r) => r.id);
-    const docs = ids.length ? await prisma.tenderDocument.findMany({ where: { tenderId: { in: ids } } }) : [];
-    const byTender = new Map<string, typeof docs>();
-    for (const d of docs) {
-      const arr = byTender.get(d.tenderId) ?? [];
-      arr.push(d);
-      byTender.set(d.tenderId, arr);
-    }
-    return { rows, documentsByTender: byTender, total };
-  } catch (err) {
-    console.error("DEBUG listTenders error:", err);
-    throw err;
+  const countRes = await prisma.$queryRaw<Array<{ count: number }>>`
+    SELECT count(*)::int AS count
+    FROM "Tender" t
+    LEFT JOIN "Municipality" m ON m.id = t."municipalityId"
+    ${where}
+  `;
+  const total = countRes[0]?.count ?? 0;
+  const ids = rows.map((r) => r.id);
+  const docs = ids.length ? await prisma.tenderDocument.findMany({ where: { tenderId: { in: ids } } }) : [];
+  const byTender = new Map<string, typeof docs>();
+  for (const d of docs) {
+    const arr = byTender.get(d.tenderId) ?? [];
+    arr.push(d);
+    byTender.set(d.tenderId, arr);
   }
+  return { rows, documentsByTender: byTender, total };
 }
 
 export async function getCategories() {
