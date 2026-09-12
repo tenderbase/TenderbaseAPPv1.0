@@ -6,6 +6,7 @@ export const ethekwiniAdapter: MunicipalityAdapter = {
   id: ETHEKWINI_SOURCE,
   name: "eThekwini Municipality",
   province: "KwaZulu-Natal",
+  type: "METROPOLITAN_MUNICIPALITY",
   sourceUrl: ETHEKWINI_BASE_URL,
   fetchOpenTenders: fetchEThekwiniOpenTenders,
 };
