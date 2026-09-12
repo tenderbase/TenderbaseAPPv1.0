@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { pool } from "./prisma.js";
 import type { NormalisedTender } from "../normalise.js";
 
@@ -103,8 +104,8 @@ export async function upsertTender(t: NormalisedTender): Promise<UpsertOutcome> 
     await client.query('DELETE FROM "TenderDocument" WHERE "tenderId" = $1', [tenderId]);
     for (const document of t.documents) {
       await client.query(
-        'INSERT INTO "TenderDocument" (id, "tenderId", name, url, "fileType", "isAddendum") VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5)',
-        [tenderId, document.name, document.url, document.fileType, document.isAddendum],
+        'INSERT INTO "TenderDocument" (id, "tenderId", name, url, "fileType", "isAddendum") VALUES ($1, $2, $3, $4, $5, $6)',
+        [randomUUID(), tenderId, document.name, document.url, document.fileType, document.isAddendum],
       );
     }
 
