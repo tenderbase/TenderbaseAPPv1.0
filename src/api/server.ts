@@ -32,12 +32,44 @@ const manualTenderOpenApi = {
   } }
 };
 
+const swaggerUiExpandAll = function () {
+  const expand = () => {
+    document.querySelectorAll('.opblock-tag[aria-expanded="false"]').forEach((tag) => (tag as HTMLElement).click());
+  };
+  expand();
+  window.setTimeout(expand, 100);
+  window.setTimeout(expand, 500);
+};
+
 export function buildServer() {
   const app = Fastify({ logger: false });
   app.register(helmet, { contentSecurityPolicy: false });
   app.register(cors, { origin: (process.env.CORS_ORIGINS ?? "*").split(",").map((s) => s.trim()).filter(Boolean) });
-  app.register(fastifySwagger, { openapi: { info: { title: "TenderBase API", description: "South African public procurement data API. Use the interactive operations below to inspect data, test filters and run protected ingestion controls.", version: "1.4.0" }, servers: [{ url: "/", description: "Live TenderBase API" }], tags: [{ name: "public", description: "Tender search, statistics, metadata and individual tender records" }, { name: "admin", description: "Protected dataset management, municipality ingestion, manual tender entry and relinking" }], components: { securitySchemes: { AdminApiKey: { type: "apiKey", in: "header", name: "x-admin-key", description: "Admin key used for protected ingestion and dataset controls." }, PublicApiKey: { type: "apiKey", in: "header", name: "x-api-key", description: "Public API key, when configured." } } } } });
-  app.register(fastifySwaggerUi, { routePrefix: "/docs", uiConfig: { docExpansion: "full", deepLinking: true, filter: true, displayRequestDuration: true, tryItOutEnabled: true, persistAuthorization: true, displayOperationId: false, defaultModelsExpandDepth: 2, defaultModelExpandDepth: 2 } });
+  app.register(fastifySwagger, { openapi: { info: { title: "TenderBase API", description: "South African public procurement data API. Use the interactive operations below to inspect data, test filters and run protected ingestion controls.", version: "1.5.0" }, servers: [{ url: "/", description: "Live TenderBase API" }], tags: [{ name: "public", description: "Tender search, statistics, metadata and individual tender records" }, { name: "admin", description: "Protected dataset management, municipality ingestion, manual tender entry and relinking" }], components: { securitySchemes: { AdminApiKey: { type: "apiKey", in: "header", name: "x-admin-key", description: "Admin key used for protected ingestion and dataset controls." }, PublicApiKey: { type: "apiKey", in: "header", name: "x-api-key", description: "Public API key, when configured." } } } } });
+  app.register(fastifySwaggerUi, {
+    routePrefix: "/docs",
+    uiConfig: {
+      docExpansion: "full",
+      deepLinking: true,
+      filter: true,
+      displayRequestDuration: true,
+      tryItOutEnabled: true,
+      persistAuthorization: true,
+      displayOperationId: false,
+      defaultModelsExpandDepth: 2,
+      defaultModelExpandDepth: 2,
+      hideUntagged: false,
+      tagsSorter: "alpha",
+      operationsSorter: "alpha",
+      onComplete: swaggerUiExpandAll,
+    },
+    theme: {
+      js: [{
+        filename: "tenderbase-swagger.js",
+        content: `(() => { const expand = () => document.querySelectorAll('.opblock-tag[aria-expanded="false"]').forEach((tag) => tag.click()); window.addEventListener('load', expand); setTimeout(expand, 100); setTimeout(expand, 500); })();`,
+      }],
+    },
+  });
 
   const apiKey = process.env.API_KEY;
   if (apiKey) app.addHook("onRequest", async (req, reply) => { const url = req.url; if (url.startsWith("/admin")) return; if (url === "/" || url.startsWith("/health") || url.startsWith("/docs")) return; const provided = (req.headers["x-api-key"] as string | undefined) ?? (req.headers.authorization ?? "").replace(/^Bearer\s+/i, ""); if (provided !== apiKey) return reply.code(401).send({ error: "Unauthorized" }); });
@@ -55,6 +87,7 @@ export function buildServer() {
 
   app.get("/admin/dashboard", { preHandler: requireAdmin, schema: { tags: ["admin"], security: [{ AdminApiKey: [] }], summary: "Admin dashboard", description: "View ingestion activity, source coverage, municipality counts and dataset health." } }, async () => ({ ...(await getAdminDashboard()), source: "live" }));
   app.get("/admin/municipalities", { preHandler: requireAdmin, schema: { tags: ["admin"], security: [{ AdminApiKey: [] }], summary: "List registered municipality adapters", description: "Shows the municipality adapters currently registered in the ingestion pipeline." } }, async () => ({ adapters: listMunicipalityAdapters().map((a) => ({ id: a.id, name: a.name, province: a.province, sourceUrl: a.sourceUrl })) }));
+  app.get("/admin/municipalities/", { preHandler: requireAdmin, schema: { tags: ["admin"], security: [{ AdminApiKey: [] }], summary: "List registered municipality adapters (trailing slash)" } }, async () => ({ adapters: listMunicipalityAdapters().map((a) => ({ id: a.id, name: a.name, province: a.province, sourceUrl: a.sourceUrl })) }));
   app.post("/admin/tenders", { preHandler: requireAdmin, schema: { tags: ["admin"], security: [{ AdminApiKey: [] }], summary: "Manually create or update a tender", description: "Enter a tender, RFQ, EOI, award or other procurement record directly into TenderBase. Use municipalityCode to associate it with a registered municipality.", ...manualTenderOpenApi } }, async (req, reply) => { const parsed = ManualTenderSchema.safeParse(req.body); if (!parsed.success) return reply.code(400).send({ error: "Invalid tender payload", issues: parsed.error.issues }); try { const result = await manualUpsertTender(parsed.data as ManualTenderInput); return reply.code(result.outcome === "inserted" ? 201 : 200).send({ ...result, source: "live" }); } catch (err) { console.error("Manual tender ingestion failed:", err); return reply.code(400).send({ error: err instanceof Error ? err.message : "Manual ingestion failed" }); } });
   app.post<{ Params: { code: string }; Querystring: { backfill?: string } }>("/admin/municipalities/:code/ingest", { preHandler: requireAdmin, schema: { tags: ["admin"], security: [{ AdminApiKey: [] }], summary: "Run municipality ingestion", description: "Run the registered adapter for a municipality. For the current adapter enter ETHEKWINI. Set backfill to true when historical records should also be fetched.", params: { type: "object", required: ["code"], properties: { code: { type: "string", description: "Registered municipality adapter code, e.g. ETHEKWINI" } } }, querystring: { type: "object", properties: { backfill: { type: "string", enum: ["true", "false"], default: "false", description: "Fetch historical/backfill records when true" } } }, response: { 200: { description: "Ingestion completed" }, 404: { description: "Municipality adapter not registered" }, 502: { description: "Ingestion failed" } } } }, async (req, reply) => { const adapter = getMunicipalityAdapter(req.params.code); if (!adapter) return reply.code(404).send({ error: `No municipality adapter registered for ${req.params.code}` }); try { const result = await runMunicipalityIngest(adapter, { backfill: req.query.backfill === "true" }); return { ...result, source: "live" }; } catch (err) { console.error("Municipality ingestion failed:", err); return reply.code(502).send({ error: err instanceof Error ? err.message : "Municipality ingestion failed" }); } });
   app.post<{ Params: { code: string } }>("/admin/municipalities/:code/relink", { preHandler: requireAdmin, schema: { tags: ["admin"], security: [{ AdminApiKey: [] }], summary: "Relink existing tenders to a municipality", description: "Link existing tender records from a source to the selected municipality without re-scraping the source.", params: { type: "object", required: ["code"], properties: { code: { type: "string", description: "Registered municipality code, e.g. ETHEKWINI" } } }, body: { type: "object", required: ["source"], properties: { source: { type: "string", description: "Existing tender source code, e.g. ETHEKWINI" } } } } }, async (req, reply) => { const parsed = RelinkSchema.safeParse(req.body); if (!parsed.success) return reply.code(400).send({ error: "source is required" }); try { return { ...(await relinkMunicipality(req.params.code, parsed.data.source)), source: "live" }; } catch (err) { return reply.code(400).send({ error: err instanceof Error ? err.message : "Municipality relink failed" }); } });
