@@ -5,8 +5,15 @@ import { contentHash, normalizeRelease } from "./ocds.js";
 import { persistBatch } from "./persist.js";
 
 export type IngestionRunSummary = {
-  runId: string; pages: number; fetched: number; inserted: number; updated: number;
-  unchanged: number; errors: number; status: "completed" | "failed"; lastError?: string;
+  runId: string;
+  pages: number;
+  fetched: number;
+  inserted: number;
+  updated: number;
+  unchanged: number;
+  errors: number;
+  status: "completed" | "failed";
+  lastError?: string;
 };
 
 async function ensureTables(pool: pg.Pool): Promise<void> {
@@ -16,8 +23,9 @@ async function ensureTables(pool: pg.Pool): Promise<void> {
       "finishedAt" timestamptz, status text not null, pages integer not null default 0,
       fetched integer not null default 0, inserted integer not null default 0,
       updated integer not null default 0, unchanged integer not null default 0,
-      errors integer not null default 0, "lastUrl" text
+      errors integer not null default 0, "lastUrl" text, "lastError" text
     );
+    alter table "V2IngestionRun" add column if not exists "lastError" text;
     create table if not exists "V2RawRelease" (
       id text primary key, "runId" text references "V2IngestionRun"(id) on delete set null,
       source text not null, ocid text not null, "releaseId" text not null,
@@ -47,6 +55,13 @@ async function storeRaw(pool: pg.Pool, runId: string, tender: ReturnType<typeof 
   );
 }
 
+async function recordError(pool: pg.Pool, runId: string, url: string, error: unknown, ocid?: string, releaseId?: string): Promise<void> {
+  await pool.query(
+    `insert into "V2IngestionError" (id,"runId",url,ocid,"releaseId",message) values ($1,$2,$3,$4,$5,$6)`,
+    [id(), runId, url, ocid ?? null, releaseId ?? null, errorMessage(error)],
+  );
+}
+
 export async function runOcdsIngestion(pool: pg.Pool, startUrl: string, maxPages = 100): Promise<IngestionRunSummary> {
   await ensureTables(pool);
   const runId = id();
@@ -65,6 +80,7 @@ export async function runOcdsIngestion(pool: pg.Pool, startUrl: string, maxPages
         summary.lastError = errorMessage(error);
         console.error(`OCDS fetch failed for ${nextUrl}: ${summary.lastError}`);
         await recordError(pool, runId, nextUrl, error);
+        summary.status = "failed";
         break;
       }
 
@@ -72,13 +88,23 @@ export async function runOcdsIngestion(pool: pg.Pool, startUrl: string, maxPages
       summary.fetched += page.records.length;
       const normalized: ReturnType<typeof normalizeRelease>[] = [];
       for (const record of page.records) {
-        try { normalized.push(normalizeRelease(record, page.url)); }
-        catch (error) { summary.errors++; summary.lastError = errorMessage(error); await recordError(pool, runId, page.url, error); }
+        try {
+          normalized.push(normalizeRelease(record, page.url));
+        } catch (error) {
+          summary.errors++;
+          summary.lastError = errorMessage(error);
+          await recordError(pool, runId, page.url, error);
+        }
       }
 
       for (const tender of normalized) {
-        try { await storeRaw(pool, runId, tender); }
-        catch (error) { summary.errors++; summary.lastError = errorMessage(error); await recordError(pool, runId, page.url, error, tender.ocid, tender.releaseId); }
+        try {
+          await storeRaw(pool, runId, tender);
+        } catch (error) {
+          summary.errors++;
+          summary.lastError = errorMessage(error);
+          await recordError(pool, runId, page.url, error, tender.ocid, tender.releaseId);
+        }
       }
 
       try {
@@ -91,6 +117,8 @@ export async function runOcdsIngestion(pool: pg.Pool, startUrl: string, maxPages
         summary.lastError = errorMessage(error);
         console.error(`OCDS persistence failed: ${summary.lastError}`);
         await recordError(pool, runId, page.url, error);
+        summary.status = "failed";
+        break;
       }
       nextUrl = page.nextUrl;
     }
@@ -101,18 +129,9 @@ export async function runOcdsIngestion(pool: pg.Pool, startUrl: string, maxPages
     console.error(`OCDS ingestion failed: ${summary.lastError}`);
   }
 
-  if (summary.errors > 0 && summary.pages === 0) summary.status = "failed";
-
   await pool.query(
-    `update "V2IngestionRun" set "finishedAt"=now(),status=$1,pages=$2,fetched=$3,inserted=$4,updated=$5,unchanged=$6,errors=$7 where id=$8`,
-    [summary.status, summary.pages, summary.fetched, summary.inserted, summary.updated, summary.unchanged, summary.errors, runId],
+    `update "V2IngestionRun" set "finishedAt"=now(),status=$1,pages=$2,fetched=$3,inserted=$4,updated=$5,unchanged=$6,errors=$7,"lastError"=$8 where id=$9`,
+    [summary.status, summary.pages, summary.fetched, summary.inserted, summary.updated, summary.unchanged, summary.errors, summary.lastError ?? null, runId],
   );
   return summary;
-}
-
-async function recordError(pool: pg.Pool, runId: string, url: string, error: unknown, ocid?: string, releaseId?: string): Promise<void> {
-  await pool.query(
-    `insert into "V2IngestionError" (id,"runId",url,ocid,"releaseId",message) values ($1,$2,$3,$4,$5,$6)`,
-    [id(), runId, url, ocid ?? null, releaseId ?? null, errorMessage(error)],
-  );
 }
