@@ -82,7 +82,6 @@ export async function buildServer() {
   app.post("/admin/ingest/ocds", {
     schema: {
       security: [{ ingestApiKey: [] }],
-      response: { 401: { type: "object", properties: { error: { type: "string" } } } },
     },
   }, async (request, reply) => {
     const configuredKey = process.env.INGEST_API_KEY?.trim();
