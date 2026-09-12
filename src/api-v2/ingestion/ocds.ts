@@ -47,7 +47,7 @@ export function normalizeRelease(input: unknown, sourceUrl: string): NormalizedT
   const buyer = asRecord(release.buyer);
   const value = asRecord(tender.value);
   const period = asRecord(tender.tenderPeriod);
-  const contact = asRecord(tender.contactPoint);
+  const contact = asRecord(tender.contactPerson ?? tender.contactPoint);
 
   const ocid = firstString(release.ocid);
   const releaseId = firstString(release.id, release.releaseId);
@@ -63,7 +63,7 @@ export function normalizeRelease(input: unknown, sourceUrl: string): NormalizedT
   const title = firstString(tender.title, release.title);
   const description = firstString(tender.description, release.description);
   const organisation = firstString(buyer.name, release.buyerName);
-  const category = firstString(tender.mainProcurementCategory, tender.procurementCategory);
+  const category = firstString(tender.category, tender.mainProcurementCategory, tender.procurementCategory);
   const province = firstString(tender.province, release.province);
   const location = firstString(tender.deliveryLocation, tender.location, release.location);
   const currency = asString(value.currency);
@@ -97,13 +97,17 @@ export function normalizeRelease(input: unknown, sourceUrl: string): NormalizedT
 
 export function classifyProcurementType(tender: JsonRecord, release: JsonRecord): string {
   const text = [
+    asString(tender.procurementMethod),
     asString(tender.procurementMethodDetails),
     asString(tender.title),
     asString(tender.description),
     asString(release.title),
+    asString(release.tag),
   ].filter(Boolean).join(" ").toLowerCase();
 
   if (/request\s+for\s+(?:quotation|quote)|\brfq\b|quotation/.test(text)) return "RFQ";
+  if (/request\s+for\s+(?:information|info)|\brfi\b/.test(text)) return "RFI";
+  if (/request\s+for\s+(?:proposal|proposals)|\brfp\b/.test(text)) return "RFP";
   if (/expression\s+of\s+interest|\beoi\b/.test(text)) return "EOI";
   if (/addendum|amendment/.test(text)) return "ADDENDUM";
   if (/cancel|withdraw|regret/.test(text)) return "CANCELLATION";
