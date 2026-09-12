@@ -41,7 +41,7 @@ export function contentHash(value: JsonRecord): string {
     .digest("hex");
 }
 
-export function normalizeRelease(input: unknown, sourceUrl: string): NormalizedTender | null {
+export function normalizeRelease(input: unknown, sourceUrl: string): NormalizedTender {
   const release = asRecord(input);
   const tender = asRecord(release.tender);
   const buyer = asRecord(release.buyer);
@@ -51,7 +51,7 @@ export function normalizeRelease(input: unknown, sourceUrl: string): NormalizedT
 
   const ocid = firstString(release.ocid);
   const releaseId = firstString(release.id, release.releaseId);
-  if (!ocid || !releaseId) return null;
+  if (!ocid || !releaseId) throw new Error("OCDS release is missing ocid or id");
 
   const tenderNumber = firstString(
     tender.id,
@@ -65,7 +65,7 @@ export function normalizeRelease(input: unknown, sourceUrl: string): NormalizedT
   const organisation = firstString(buyer.name, release.buyerName);
   const category = firstString(tender.mainProcurementCategory, tender.procurementCategory);
   const province = firstString(tender.province, release.province);
-  const location = firstString(tender.location, release.location);
+  const location = firstString(tender.deliveryLocation, tender.location, release.location);
   const currency = asString(value.currency);
 
   const normalized: NormalizedTender = {
@@ -86,12 +86,11 @@ export function normalizeRelease(input: unknown, sourceUrl: string): NormalizedT
     status: firstString(tender.status, release.status),
     contactName: firstString(contact.name),
     contactEmail: firstString(contact.email),
-    contactPhone: firstString(contact.telephone, contact.phone),
+    contactPhone: firstString(contact.telephone, contact.phone, contact.telephoneNumber),
     procurementType: classifyProcurementType(tender, release),
     raw: release,
   };
 
-  // Keep currency available to downstream persistence without expanding the public model yet.
   if (currency) normalized.raw._tenderbaseCurrency = currency;
   return normalized;
 }
