@@ -17,10 +17,8 @@ export async function fetchJson(url: string, timeoutMs = 120_000): Promise<unkno
         headers: {
           accept: "application/json, text/json, */*",
           "user-agent": "TenderBase/2.0 (+https://tenderbase.co.za)",
-          connection: "keep-alive",
         },
         redirect: "follow",
-        cache: "no-store",
         signal: controller.signal,
       });
       const body = await response.text();
@@ -56,6 +54,12 @@ export async function fetchOcdsPage(url: string, trustedOrigin = url): Promise<F
   const payload = await fetchJson(url);
   const root = payload && typeof payload === "object" ? payload as Record<string, unknown> : {};
   const releases = Array.isArray(root.releases) ? root.releases : [];
+  if (!releases.length) {
+    const links = root.links && typeof root.links === "object" ? root.links as Record<string, unknown> : {};
+    if (!links.next && !links.prev) {
+      throw new Error("OCDS API returned no releases and no pagination links");
+    }
+  }
   const links = root.links && typeof root.links === "object" ? root.links as Record<string, unknown> : {};
   const next = typeof links.next === "string" && links.next.length > 0 ? links.next : undefined;
   if (next && !isSameOrigin(next, trustedOrigin)) throw new Error("OCDS API returned an untrusted pagination URL");
