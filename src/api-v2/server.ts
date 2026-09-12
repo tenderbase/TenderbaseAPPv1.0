@@ -25,7 +25,15 @@ export function buildV2Server() {
   app.register(cors, { origin: (process.env.CORS_ORIGINS ?? "*").split(",").map((v) => v.trim()).filter(Boolean) });
   app.addHook("onClose", async () => { if (pool) await pool.end(); });
 
-  app.get("/", async (_request, reply) => reply.redirect("/docs"));
+  // Render probes the root URL. Return a real JSON response instead of relying on a redirect.
+  app.get("/", async () => ({
+    name: "TenderBase API V2",
+    status: "ok",
+    version: "2.0.0",
+    docs: "/docs",
+    health: "/health",
+    tenders: "/tenders",
+  }));
 
   app.get("/health", async (_request, reply) => {
     let database: "ok" | "not_configured" | "error" = "not_configured";
@@ -40,6 +48,7 @@ export function buildV2Server() {
     openapi: "3.0.3",
     info: { title: "TenderBase API V2", version: "2.0.0" },
     paths: {
+      "/": { get: { summary: "API landing endpoint" } },
       "/health": { get: { summary: "API and database health" } },
       "/tenders": { get: { summary: "List tenders" } },
       "/admin/ingest/ocds": { post: { summary: "Run protected OCDS ingestion" } }
