@@ -8,6 +8,8 @@ export interface MunicipalityAdapter {
   name: string;
   /** South African province. */
   province: string;
+  /** Municipality classification used when auto-provisioning registry rows. */
+  type?: string;
   /** Official municipal procurement landing page. */
   sourceUrl: string;
   /** Fetch and parse the municipality's currently published procurement opportunities. */
