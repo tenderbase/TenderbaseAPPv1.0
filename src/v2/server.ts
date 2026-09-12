@@ -6,6 +6,7 @@ import swaggerUi from "@fastify/swagger-ui";
 import { z } from "zod";
 import { config, corsOrigins } from "./config.js";
 import { ensureSchema, pool } from "./db.js";
+import { runOcdsIngestion } from "../api-v2/ingestion/run.js";
 
 const listQuery = z.object({
   page: z.coerce.number().int().min(1).default(1),
@@ -28,6 +29,7 @@ export async function buildServer() {
     openapi: {
       info: { title: "TenderBase API V2", version: "2.0.0", description: "South African public procurement API" },
       servers: [{ url: "https://tenderbaseapiv2-0.onrender.com" }],
+      components: { securitySchemes: { ingestApiKey: { type: "apiKey", in: "header", name: "x-api-key" } } },
     },
   });
   await app.register(swaggerUi, { routePrefix: "/docs" });
@@ -56,8 +58,6 @@ export async function buildServer() {
     if (status) add("t.status =", status);
     if (procurementType) add("t.procurement_type =", procurementType);
     if (municipality) add("m.code =", municipality);
-
-    // Replace the simple q predicate with a parameter-safe combined search.
     if (q) where[where.length - 1] = `(t.title ILIKE '%' || $${values.length} || '%' OR t.description ILIKE '%' || $${values.length} || '%')`;
 
     const clause = where.length ? `WHERE ${where.join(" AND ")}` : "";
@@ -77,6 +77,24 @@ export async function buildServer() {
     `, dataValues);
 
     return { data: result.rows, meta: { page, limit, total: countResult.rows[0].count, pages: Math.ceil(countResult.rows[0].count / limit) } };
+  });
+
+  app.post("/admin/ingest/ocds", {
+    schema: {
+      security: [{ ingestApiKey: [] }],
+      response: { 401: { type: "object", properties: { error: { type: "string" } } } },
+    },
+  }, async (request, reply) => {
+    const configuredKey = process.env.INGEST_API_KEY?.trim();
+    const providedKey = String(request.headers["x-api-key"] ?? "").trim();
+    if (!configuredKey || !providedKey || providedKey !== configuredKey) {
+      return reply.code(401).send({ error: "Unauthorized" });
+    }
+    if (!process.env.OCDS_API_URL) {
+      return reply.code(503).send({ error: "OCDS_API_URL is not configured" });
+    }
+    const maxPages = Math.min(100, Math.max(1, Number(process.env.OCDS_MAX_PAGES ?? 1) || 1));
+    return runOcdsIngestion(pool, process.env.OCDS_API_URL, maxPages);
   });
 
   app.get("/tenders/:id", async (request, reply) => {
