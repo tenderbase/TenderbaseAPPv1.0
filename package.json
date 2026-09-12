@@ -11,6 +11,7 @@
     "ingest:v2": "tsx src/cli/ingest-v2.ts",
     "ingest:municipality": "tsx src/cli/municipality.ts",
     "serve": "tsx src/cli/serve.ts",
+    "test:v2": "tsx --test src/api-v2/**/*.test.ts",
     "test:contract": "tsx scripts/contract_test.ts",
     "test:retry": "tsx scripts/retry_test.ts",
     "test:ethekwini": "tsx scripts/ethekwini_test.ts",
