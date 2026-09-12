@@ -4,11 +4,8 @@ import type { NormalisedTender } from "../normalise.js";
 export type UpsertOutcome = "inserted" | "updated" | "unchanged";
 
 /**
- * Upsert one tender, keyed on the OCDS identity (source, ocid, releaseId).
- *
- * Change detection matters because the feed republishes releases: an identical
- * re-publication must NOT count as an update, or every hourly run would churn
- * the whole table and (later) re-notify users about nothing.
+ * Upsert one tender, keyed on the source identity (source, ocid, releaseId).
+ * Municipality identity is resolved through the stable municipality code.
  */
 export async function upsertTender(t: NormalisedTender): Promise<UpsertOutcome> {
   const key = {
@@ -24,9 +21,22 @@ export async function upsertTender(t: NormalisedTender): Promise<UpsertOutcome> 
     select: { id: true, contentHash: true },
   });
 
+  const municipality = t.municipalityCode
+    ? await prisma.municipality.findUnique({
+        where: { code: t.municipalityCode },
+        select: { id: true },
+      })
+    : null;
+
+  if (t.municipalityCode && !municipality) {
+    throw new Error(`Unknown municipality code: ${t.municipalityCode}`);
+  }
+
   const fields = {
     sourceUrl: t.sourceUrl,
     tenderNumber: t.tenderNumber,
+    procurementType: t.procurementType,
+    municipalityId: municipality?.id ?? null,
     title: t.title,
     description: t.description,
     organisation: t.organisation,
@@ -48,7 +58,6 @@ export async function upsertTender(t: NormalisedTender): Promise<UpsertOutcome> 
 
   if (existing) {
     if (existing.contentHash === t.contentHash) {
-      // Unchanged — only refresh lastSeenAt so we know it's still live.
       await prisma.tender.update({
         where: { id: existing.id },
         data: { lastSeenAt: new Date() },
