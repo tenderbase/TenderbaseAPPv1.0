@@ -5,6 +5,8 @@ import fastifySwagger from "@fastify/swagger";
 import fastifySwaggerUi from "@fastify/swagger-ui";
 import { z } from "zod";
 import { prisma } from "../db/prisma.js";
+import { getMunicipalityAdapter, listMunicipalityAdapters } from "../municipalities/registry.js";
+import { runMunicipalityIngest } from "../pipeline/municipality.js";
 import {
   listTenders,
   getCategories,
@@ -14,6 +16,20 @@ import {
   getStats,
 } from "./tenders.js";
 import { toContractTender } from "./serialise.js";
+import { getAdminDashboard, manualUpsertTender, relinkMunicipality } from "./admin.js";
+import type { ProcurementType, TenderDocument } from "../normalise.js";
+
+const ProcurementTypeSchema = z.enum([
+  "TENDER",
+  "RFQ",
+  "QUOTATION",
+  "EOI",
+  "ADDENDUM",
+  "AWARD",
+  "CANCELLATION",
+  "NOTICE",
+  "OTHER",
+]);
 
 const QuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
@@ -21,6 +37,7 @@ const QuerySchema = z.object({
   perPage: z.coerce.number().int().min(1).optional(),
   q: z.string().trim().min(1).optional(),
   search: z.string().trim().min(1).optional(),
+  source: z.string().trim().min(1).optional(),
   province: z.string().trim().min(1).optional(),
   category: z.string().trim().min(1).optional(),
   status: z.string().trim().min(1).optional(),
@@ -34,14 +51,48 @@ const QuerySchema = z.object({
   cidbGrade: z.string().trim().min(1).optional(),
   organisation: z.string().trim().min(1).optional(),
   constructionOnly: z
-    .union([z.boolean(), z.enum(["true", "false"])])
+    .union([z.boolean(), z.enum(["true", "false"]))])
     .optional()
     .transform((v) => v === true || v === "true"),
   sort: z.enum(["latest", "closing", "closing_desc", "published_asc"]).default("latest"),
 });
 
+const ManualTenderSchema = z.object({
+  source: z.string().trim().min(1).max(100).default("MANUAL"),
+  sourceUrl: z.string().url(),
+  ocid: z.string().trim().min(1).max(300),
+  releaseId: z.string().trim().min(1).max(300),
+  tenderNumber: z.string().trim().min(1).max(300),
+  procurementType: ProcurementTypeSchema.default("TENDER"),
+  municipalityCode: z.string().trim().min(1).max(50).nullable().optional(),
+  title: z.string().max(1000).nullable().optional(),
+  description: z.string().max(20000).nullable().optional(),
+  organisation: z.string().max(500).nullable().optional(),
+  category: z.string().max(300).nullable().optional(),
+  province: z.string().max(100).nullable().optional(),
+  location: z.string().max(500).nullable().optional(),
+  valueCents: z.number().int().nonnegative().nullable().optional(),
+  publishedDate: z.string().datetime().nullable().optional(),
+  closingDate: z.string().datetime().nullable().optional(),
+  status: z.string().max(100).nullable().optional(),
+  contactName: z.string().max(300).nullable().optional(),
+  contactEmail: z.string().email().nullable().optional(),
+  contactPhone: z.string().max(100).nullable().optional(),
+  cidbGrade: z.string().max(50).nullable().optional(),
+  cidbGradeRaw: z.string().max(500).nullable().optional(),
+  documents: z.array(z.object({
+    name: z.string().max(500).nullable(),
+    url: z.string().url(),
+    fileType: z.string().max(150).nullable(),
+    isAddendum: z.boolean(),
+  })).max(100).default([]),
+  isOpportunity: z.boolean().default(true),
+});
+
+const RelinkSchema = z.object({ source: z.string().trim().min(1).max(100) });
+
 function buildDashboardHtml(): string {
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>TenderBase API</title><style>body{font-family:system-ui,-apple-system,sans-serif;background:#090d16;color:#f3f4f6;max-width:1000px;margin:0 auto;padding:40px;line-height:1.6}a{color:#38bdf8}code,pre{background:#111827;padding:4px 8px;border-radius:6px}section{background:#111827;border:1px solid #1f2937;border-radius:12px;padding:20px;margin:18px 0}h1{margin-bottom:4px}p{color:#9ca3af}</style></head><body><h1>TenderBase API</h1><p>South African public procurement data feed.</p><section><h2>Documentation</h2><p><a href="/docs">Open Swagger / OpenAPI documentation →</a></p></section><section><h2>Core endpoints</h2><p><code>GET /tenders</code> — searchable tender feed</p><p><code>GET /municipalities</code> — enabled municipality filter options</p><p><code>GET /procurement-types</code> — procurement type options</p><p><code>GET /categories</code> — category counts</p><p><code>GET /provinces</code> — province counts</p><p><code>GET /stats</code> — dataset health metrics</p><p><code>GET /health</code> — liveness</p></section><section><h2>Municipal RFQ example</h2><pre>/tenders?municipality=ETHEKWINI&amp;procurementType=RFQ</pre></section></body></html>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>TenderBase API</title><style>body{font-family:system-ui,-apple-system,sans-serif;background:#090d16;color:#f3f4f6;max-width:1000px;margin:0 auto;padding:40px;line-height:1.6}a{color:#38bdf8}code,pre{background:#111827;padding:4px 8px;border-radius:6px}section{background:#111827;border:1px solid #1f2937;border-radius:12px;padding:20px;margin:18px 0}h1{margin-bottom:4px}p{color:#9ca3af}</style></head><body><h1>TenderBase API</h1><p>South African public procurement data feed.</p><section><h2>Documentation</h2><p><a href="/docs">Open Swagger / OpenAPI documentation →</a></p></section><section><h2>Core endpoints</h2><p><code>GET /tenders</code> — searchable tender feed</p><p><code>GET /municipalities</code> — enabled municipality filter options</p><p><code>GET /procurement-types</code> — procurement type options</p><p><code>GET /categories</code> — category counts</p><p><code>GET /provinces</code> — province counts</p><p><code>GET /stats</code> — dataset health metrics</p><p><code>GET /health</code> — liveness</p></section><section><h2>Admin controls</h2><p><code>GET /admin/dashboard</code> — ingestion and dataset control panel data</p><p><code>POST /admin/tenders</code> — manually ingest or update a tender</p><p><code>POST /admin/municipalities/:code/ingest</code> — run a municipality adapter</p><p><code>POST /admin/municipalities/:code/relink</code> — link existing source records to a municipality</p></section><section><h2>Municipal RFQ example</h2><pre>/tenders?municipality=ETHEKWINI&amp;procurementType=RFQ</pre></section></body></html>`;
 }
 
 export function buildServer() {
@@ -60,9 +111,13 @@ export function buildServer() {
       info: {
         title: "TenderBase API",
         description: "South African public procurement data API",
-        version: "1.0.0",
+        version: "1.1.0",
       },
       servers: [{ url: "/", description: "Live TenderBase API" }],
+      tags: [
+        { name: "public", description: "Public tender discovery and metadata" },
+        { name: "admin", description: "Protected ingestion and dataset controls" },
+      ],
     },
   });
 
@@ -85,7 +140,17 @@ export function buildServer() {
     });
   }
 
-  app.get("/", async (req, reply) => {
+  const requireAdmin = async (req: any, reply: any) => {
+    const adminKey = process.env.ADMIN_API_KEY ?? process.env.API_KEY;
+    if (!adminKey) return reply.code(503).send({ error: "Admin API is not configured" });
+    const provided =
+      (req.headers["x-admin-key"] as string | undefined) ??
+      (req.headers["x-api-key"] as string | undefined) ??
+      (req.headers.authorization ?? "").replace(/^Bearer\s+/i, "");
+    if (provided !== adminKey) return reply.code(401).send({ error: "Admin authorization required" });
+  };
+
+  app.get("/", { schema: { tags: ["public"] } }, async (req, reply) => {
     const accept = req.headers.accept ?? "";
     if (accept.includes("text/html") || !accept.includes("application/json")) {
       return reply.type("text/html").send(buildDashboardHtml());
@@ -98,38 +163,38 @@ export function buildServer() {
     };
   });
 
-  app.get("/health", async () => ({
+  app.get("/health", { schema: { tags: ["public"] } }, async () => ({
     status: "ok",
     source: "live",
     uptimeSeconds: Math.round(process.uptime()),
   }));
 
-  app.get("/stats", async () => {
+  app.get("/stats", { schema: { tags: ["public"] } }, async () => {
     const stats = await getStats();
     return { stats: { ...stats, uptimeSeconds: Math.round(process.uptime()) }, source: "live" };
   });
 
-  app.get("/categories", async () => {
+  app.get("/categories", { schema: { tags: ["public"] } }, async () => {
     const categories = await getCategories();
     return { categories, total: categories.length, source: "live" };
   });
 
-  app.get("/provinces", async () => {
+  app.get("/provinces", { schema: { tags: ["public"] } }, async () => {
     const provinces = await getProvinces();
     return { provinces, total: provinces.length, source: "live" };
   });
 
-  app.get("/municipalities", async () => {
+  app.get("/municipalities", { schema: { tags: ["public"] } }, async () => {
     const municipalities = await getMunicipalities();
     return { municipalities, total: municipalities.length, source: "live" };
   });
 
-  app.get("/procurement-types", async () => {
+  app.get("/procurement-types", { schema: { tags: ["public"] } }, async () => {
     const procurementTypes = await getProcurementTypes();
     return { procurementTypes, total: procurementTypes.length, source: "live" };
   });
 
-  app.get("/tenders", async (req, reply) => {
+  app.get("/tenders", { schema: { tags: ["public"] } }, async (req, reply) => {
     const parsed = QuerySchema.safeParse(req.query);
     if (!parsed.success) {
       return reply.code(400).send({
@@ -145,6 +210,7 @@ export function buildServer() {
         page: qp.page,
         limit,
         q: qp.q ?? qp.search,
+        source: qp.source,
         province: qp.province,
         category: qp.category,
         status: qp.status,
@@ -178,7 +244,7 @@ export function buildServer() {
     }
   });
 
-  app.get<{ Params: { id: string } }>("/tenders/:id", async (req, reply) => {
+  app.get<{ Params: { id: string } }>("/tenders/:id", { schema: { tags: ["public"] } }, async (req, reply) => {
     try {
       const tender = await prisma.tender.findUnique({ where: { id: req.params.id } });
       if (!tender) return reply.code(404).send({ error: "Tender not found" });
@@ -187,6 +253,75 @@ export function buildServer() {
     } catch (err) {
       console.error("Error in GET /tenders/:id:", err);
       return reply.code(503).send({ error: "Tender data is temporarily unavailable" });
+    }
+  });
+
+  app.get("/admin/dashboard", { preHandler: requireAdmin, schema: { tags: ["admin"] } }, async () => {
+    return { ...await getAdminDashboard(), source: "live" };
+  });
+
+  app.get("/admin/municipalities", { preHandler: requireAdmin, schema: { tags: ["admin"] } }, async () => {
+    return { adapters: listMunicipalityAdapters().map((a) => ({ id: a.id, name: a.name, province: a.province, sourceUrl: a.sourceUrl })) };
+  });
+
+  app.post("/admin/tenders", { preHandler: requireAdmin, schema: { tags: ["admin"] } }, async (req, reply) => {
+    const parsed = ManualTenderSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: "Invalid tender payload", issues: parsed.error.issues });
+    }
+    try {
+      const result = await manualUpsertTender(parsed.data as {
+        source: string;
+        sourceUrl: string;
+        ocid: string;
+        releaseId: string;
+        tenderNumber: string;
+        procurementType: ProcurementType;
+        municipalityCode?: string | null;
+        title?: string | null;
+        description?: string | null;
+        organisation?: string | null;
+        category?: string | null;
+        province?: string | null;
+        location?: string | null;
+        valueCents?: number | null;
+        publishedDate?: string | null;
+        closingDate?: string | null;
+        status?: string | null;
+        contactName?: string | null;
+        contactEmail?: string | null;
+        contactPhone?: string | null;
+        cidbGrade?: string | null;
+        cidbGradeRaw?: string | null;
+        documents: TenderDocument[];
+        isOpportunity: boolean;
+      });
+      return reply.code(result.outcome === "inserted" ? 201 : 200).send({ ...result, source: "live" });
+    } catch (err) {
+      console.error("Manual tender ingestion failed:", err);
+      return reply.code(400).send({ error: err instanceof Error ? err.message : "Manual ingestion failed" });
+    }
+  });
+
+  app.post<{ Params: { code: string }; Querystring: { backfill?: string } }>("/admin/municipalities/:code/ingest", { preHandler: requireAdmin, schema: { tags: ["admin"] } }, async (req, reply) => {
+    const adapter = getMunicipalityAdapter(req.params.code);
+    if (!adapter) return reply.code(404).send({ error: `No municipality adapter registered for ${req.params.code}` });
+    try {
+      const result = await runMunicipalityIngest(adapter, { backfill: req.query.backfill === "true" });
+      return { ...result, source: "live" };
+    } catch (err) {
+      console.error("Municipality ingestion failed:", err);
+      return reply.code(502).send({ error: err instanceof Error ? err.message : "Municipality ingestion failed" });
+    }
+  });
+
+  app.post<{ Params: { code: string } }>("/admin/municipalities/:code/relink", { preHandler: requireAdmin, schema: { tags: ["admin"] } }, async (req, reply) => {
+    const parsed = RelinkSchema.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: "source is required" });
+    try {
+      return { ...(await relinkMunicipality(req.params.code, parsed.data.source)), source: "live" };
+    } catch (err) {
+      return reply.code(400).send({ error: err instanceof Error ? err.message : "Municipality relink failed" });
     }
   });
 
