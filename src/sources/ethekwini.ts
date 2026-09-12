@@ -1,13 +1,10 @@
 import { createHash } from "node:crypto";
 import type { NormalisedTender, TenderDocument } from "../normalise.js";
-import { cleanText, parseDate, extractCidbGrade } from "../normalise.js";
+import { cleanText, parseDate, extractCidbGrade, classifyProcurementType } from "../normalise.js";
 
 export const ETHEKWINI_SOURCE = "ETHEKWINI";
 export const ETHEKWINI_BASE_URL = "https://durban.gov.za/pages/business/procurement";
 
-// eThekwini publishes the same procurement content on several official
-// subdomains. GitHub-hosted runners have recently timed out against the main
-// hostname, so try the official mirrors before using the transport fallback.
 const OFFICIAL_BASE_URLS = [
   "https://tenders.durban.gov.za/pages/business/procurement",
   "https://market.durban.gov.za/pages/business/procurement",
@@ -20,7 +17,6 @@ const OFFICIAL_BASE_URLS = [
 const READER_BASE_URL = "https://r.jina.ai/";
 const USER_AGENT = "TenderBase/1.0 (+https://tenderbase-web.onrender.com/)";
 const MAX_PAGES = 50;
-const CONNECT_TIMEOUT_MS = 20_000;
 const RESPONSE_TIMEOUT_MS = 60_000;
 const ATTEMPTS_PER_SOURCE = 2;
 const RETRY_DELAYS_MS = [2_000, 5_000];
@@ -127,11 +123,12 @@ function blockToTender(block: string, htmlBlock: string, page: number, sourceBas
   const contactPhone = findField(block, "Contact Number");
   const contactEmail = findField(block, "Email");
   const category = cleanText(block.match(/General\s+·\s+([^\n]+)/i)?.[1] ?? "Municipal Procurement");
+  const procurementType = classifyProcurementType(title, description);
   const documents = extractDocuments(htmlBlock, sourceBaseUrl);
   const sourceUrl = `${ETHEKWINI_BASE_URL}?page=${page}#${encodeURIComponent(reference)}`;
   const cidb = extractCidbGrade(title, description);
   const contentHash = createHash("sha256")
-    .update(JSON.stringify({ title, description, organisation, category, closingDate, contactName, contactEmail, contactPhone, documents: documents.map((d) => d.url) }))
+    .update(JSON.stringify({ title, description, organisation, category, procurementType, closingDate, contactName, contactEmail, contactPhone, documents: documents.map((d) => d.url) }))
     .digest("hex");
 
   return {
@@ -140,6 +137,8 @@ function blockToTender(block: string, htmlBlock: string, page: number, sourceBas
     ocid: `ETHEKWINI-${reference.toUpperCase()}`,
     releaseId: "current",
     tenderNumber: reference,
+    procurementType,
+    municipalityCode: "ETHEKWINI",
     title,
     description,
     organisation,
@@ -156,7 +155,7 @@ function blockToTender(block: string, htmlBlock: string, page: number, sourceBas
     cidbGrade: cidb.grade,
     cidbGradeRaw: cidb.raw,
     documents,
-    isOpportunity: true,
+    isOpportunity: procurementType !== "CANCELLATION" && procurementType !== "AWARD",
     contentHash,
   };
 }
@@ -222,12 +221,7 @@ async function fetchDirect(url: string): Promise<{ html: string; baseUrl: string
 async function fetchViaReader(officialUrl: string): Promise<{ html: string; baseUrl: string }> {
   const readerUrl = `${READER_BASE_URL}${officialUrl}`;
   const response = await fetchWithTimeout(readerUrl, {
-    headers: {
-      accept: "text/html,application/xhtml+xml",
-      "user-agent": USER_AGENT,
-      "x-respond-with": "html",
-      "x-timeout": "30",
-    },
+    headers: { accept: "text/html,application/xhtml+xml", "user-agent": USER_AGENT, "x-respond-with": "html", "x-timeout": "30" },
   });
   if (!response.ok) throw new Error(`Reader fallback returned HTTP ${response.status}`);
   const parsed = new URL(officialUrl);
@@ -251,9 +245,6 @@ async function fetchPage(page: number): Promise<{ html: string; baseUrl: string;
     }
   }
 
-  // Official public crawlers are currently seeing the procurement data while
-  // GitHub-hosted runners can time out against the municipality edge. Reader
-  // is only a transport fallback; provenance URLs remain official eThekwini.
   const canonicalUrl = urls.at(-1)!;
   try {
     const result = await fetchViaReader(canonicalUrl);
