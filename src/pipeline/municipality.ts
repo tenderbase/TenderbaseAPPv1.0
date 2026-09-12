@@ -1,6 +1,7 @@
 import { prisma } from "../db/prisma.js";
 import { upsertTender } from "../db/upsert.js";
-import { fetchEThekwiniOpenTenders } from "../sources/ethekwini.js";
+import type { MunicipalityAdapter } from "../municipalities/types.js";
+import { ethekwiniAdapter } from "../municipalities/ethekwini.js";
 
 export interface MunicipalityIngestResult {
   source: string;
@@ -13,16 +14,19 @@ export interface MunicipalityIngestResult {
   durationMs: number;
 }
 
-/** Ingest eThekwini's public open procurement notices into the common Tender schema. */
-export async function runEThekwiniIngest(opts: { backfill?: boolean } = {}): Promise<MunicipalityIngestResult> {
+/** Ingest any municipal adapter through the common Tender persistence path. */
+export async function runMunicipalityIngest(
+  adapter: MunicipalityAdapter,
+  opts: { backfill?: boolean } = {},
+): Promise<MunicipalityIngestResult> {
   const startedAt = Date.now();
   const run = await prisma.scraperRun.create({
-    data: { source: "ETHEKWINI", status: "RUNNING", isBackfill: !!opts.backfill },
+    data: { source: adapter.id, status: "RUNNING", isBackfill: !!opts.backfill },
   });
 
   try {
-    const res = await fetchEThekwiniOpenTenders();
-    if (!res.tenders.length) throw new Error("eThekwini scraper fetched 0 tenders");
+    const res = await adapter.fetchOpenTenders();
+    if (!res.tenders.length) throw new Error(`${adapter.name} scraper fetched 0 tenders`);
 
     const counts = { inserted: 0, updated: 0, unchanged: 0, errors: 0 };
     for (const tender of res.tenders) {
@@ -57,7 +61,7 @@ export async function runEThekwiniIngest(opts: { backfill?: boolean } = {}): Pro
       },
     });
 
-    return { source: "ETHEKWINI", pages: res.pages, durationMs, fetched: res.tenders.length, ...counts };
+    return { source: adapter.id, pages: res.pages, durationMs, fetched: res.tenders.length, ...counts };
   } catch (error) {
     await prisma.scraperRun.update({
       where: { id: run.id },
@@ -65,4 +69,9 @@ export async function runEThekwiniIngest(opts: { backfill?: boolean } = {}): Pro
     });
     throw error;
   }
+}
+
+/** Backwards-compatible wrapper while callers migrate to the registry contract. */
+export async function runEThekwiniIngest(opts: { backfill?: boolean } = {}): Promise<MunicipalityIngestResult> {
+  return runMunicipalityIngest(ethekwiniAdapter, opts);
 }
