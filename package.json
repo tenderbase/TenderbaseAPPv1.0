@@ -4,14 +4,14 @@
   "private": true,
   "description": "Ingestion pipeline + API for TenderBase (SA public procurement tenders)",
   "type": "module",
-  "engines": {
-    "node": ">=20"
-  },
+  "engines": { "node": ">=20" },
   "scripts": {
     "check": "tsx src/cli/check.ts",
     "ingest": "tsx src/cli/ingest.ts",
+    "ingest:v2": "tsx src/cli/ingest-v2.ts",
     "ingest:municipality": "tsx src/cli/municipality.ts",
     "serve": "tsx src/cli/serve.ts",
+    "test:v2": "tsx --test src/api-v2/**/*.test.ts",
     "test:contract": "tsx scripts/contract_test.ts",
     "test:retry": "tsx scripts/retry_test.ts",
     "test:ethekwini": "tsx scripts/ethekwini_test.ts",
@@ -25,6 +25,7 @@
     "build": "tsc -p tsconfig.json",
     "hourly:prod": "node dist/cli/hourly.js",
     "backfill:prod": "node dist/cli/ingest.js --backfill --live --days 31",
+    "ingest:v2:prod": "node dist/cli/ingest-v2.js",
     "ingest:municipality:prod": "node dist/cli/municipality.js"
   },
   "dependencies": {
@@ -38,7 +39,7 @@
     "fastify": "^5.12.3",
     "pg": "^8.23.0",
     "web-push": "^3.6.7",
-    "zod": "^3.23.8"
+    "zod": "^3.23.4"
   },
   "devDependencies": {
     "@types/node": "^20.14.10",

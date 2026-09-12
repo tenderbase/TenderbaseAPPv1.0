@@ -1,0 +1,21 @@
+name: TenderBase API V2 validation
+
+on:
+  push:
+    branches: [api-v2-clean]
+  pull_request:
+    branches: [api-v2-clean]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npx prisma generate
+      - run: npm run typecheck
+      - run: npm run build
